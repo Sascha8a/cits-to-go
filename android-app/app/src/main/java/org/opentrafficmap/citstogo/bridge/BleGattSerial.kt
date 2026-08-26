@@ -120,9 +120,17 @@ class BleGattSerial(private val context: Context) : CtgByteTransport {
                 pendingWrite?.countDown()
                 return
             }
-            if (newState == BluetoothProfile.STATE_CONNECTED && !gatt.discoverServices()) {
-                connectError.set("Bluetooth service discovery could not start")
-                ready.countDown()
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                gatt.setPreferredPhy(
+                    BluetoothDevice.PHY_LE_2M_MASK,
+                    BluetoothDevice.PHY_LE_2M_MASK,
+                    BluetoothDevice.PHY_OPTION_NO_PREFERRED,
+                )
+                if (!gatt.discoverServices()) {
+                    connectError.set("Bluetooth service discovery could not start")
+                    ready.countDown()
+                }
             }
         }
 
@@ -220,7 +228,7 @@ class BleGattSerial(private val context: Context) : CtgByteTransport {
             var offset = 0
             while (offset < buffer.size) {
                 connectError.get()?.let { throw IOException(it) }
-                val chunkLength = minOf(buffer.size - offset, max(20, mtu - 3))
+                val chunkLength = minOf(buffer.size - offset, 512, max(20, mtu - 3))
                 val chunk = buffer.copyOfRange(offset, offset + chunkLength)
                 val latch = CountDownLatch(1)
                 pendingWrite = latch

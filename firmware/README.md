@@ -105,6 +105,10 @@ The firmware advertises as **CITS-to-go** and exposes a small UART-style GATT se
 - TX (firmware notifies): `6e400003-b5a3-f393-e0a9-e50e24dcca9e`
 
 BLE carries the exact same COBS-delimited `CTG1` byte stream as USB. GATT packets are treated only as chunks of that stream, so CTG frames may span multiple BLE writes or notifications.
+Captured records are copied into a bounded BLE transmit queue so a temporarily
+full NimBLE buffer pool does not block Wi-Fi capture or USB output. The BLE link
+uses a 517-byte ATT MTU and requests a 7.5-15 ms connection interval; the Android
+client also requests high connection priority and the 2 Mbit PHY.
 
 Bluetooth access is owner-bonded:
 

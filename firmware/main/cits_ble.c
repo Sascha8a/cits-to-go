@@ -1,11 +1,12 @@
 #include "cits_ble.h"
+#include "sdkconfig.h"
 
 #include <stdbool.h>
 #include <string.h>
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "host/ble_att.h"
@@ -23,9 +24,22 @@
 
 #define CITS_BLE_DEVICE_NAME "CITS-to-go"
 #define CITS_BLE_INVALID_CONN_HANDLE 0xffffu
-#define CITS_BLE_NOTIFY_RETRY_MS 5
 #define CITS_BLE_MAX_BONDS 2
 #define CITS_BLE_ENROLLMENT_WINDOW_US (30LL * 1000LL * 1000LL)
+#define CITS_BLE_FRAME_HEADER_LEN 32u
+#define CITS_BLE_FRAME_TRAILER_LEN 4u
+#define CITS_BLE_COBS_OVERHEAD(len) (((len) / 254u) + 1u)
+#define CITS_BLE_MAX_DECODED_LEN \
+    (CITS_BLE_FRAME_HEADER_LEN + CONFIG_CITS_MAX_PACKET_BYTES + CITS_BLE_FRAME_TRAILER_LEN)
+#define CITS_BLE_MAX_WRITE_LEN \
+    (CITS_BLE_MAX_DECODED_LEN + CITS_BLE_COBS_OVERHEAD(CITS_BLE_MAX_DECODED_LEN) + 1u)
+#define CITS_BLE_TX_QUEUE_DEPTH CONFIG_CITS_PACKET_POOL_SIZE
+
+typedef struct {
+    uint16_t conn_handle;
+    uint16_t len;
+    uint8_t data[CITS_BLE_MAX_WRITE_LEN];
+} ble_tx_slot_t;
 
 /* ESP-IDF's NimBLE examples expose the persistent-store initializer this way. */
 void ble_store_config_init(void);
@@ -48,7 +62,10 @@ static const ble_uuid128_t tx_uuid = BLE_UUID128_INIT(
     0x93, 0xf3, 0xa3, 0xb5, 0x03, 0x00, 0x40, 0x6e);
 
 static cits_ble_rx_callback_t rx_callback;
-static SemaphoreHandle_t tx_mutex;
+static QueueHandle_t tx_free_queue;
+static QueueHandle_t tx_queue;
+static TaskHandle_t tx_task_handle;
+static ble_tx_slot_t tx_slots[CITS_BLE_TX_QUEUE_DEPTH];
 static uint16_t tx_value_handle;
 static volatile uint16_t conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
 static volatile bool notify_enabled;
@@ -59,6 +76,19 @@ static volatile uint16_t enrollment_conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
 static uint8_t own_addr_type;
 
 static void advertise(void);
+
+static void request_fast_connection(uint16_t handle)
+{
+    const struct ble_gap_upd_params params = {
+        .itvl_min = 6,  /* 7.5 ms */
+        .itvl_max = 12, /* 15 ms */
+        .latency = 0,
+        .supervision_timeout = 400,
+        .min_ce_len = 0,
+        .max_ce_len = 0,
+    };
+    (void)ble_gap_update_params(handle, &params);
+}
 
 static bool peer_is_bonded(const ble_addr_t *peer_id_addr)
 {
@@ -204,6 +234,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             return 0;
         }
         link_secured = true;
+        request_fast_connection(event->enc_change.conn_handle);
         if (enrollment_conn_handle == event->enc_change.conn_handle) {
             /* NimBLE can retain two bonds temporarily. Commit replacement only
              * after pairing succeeded, preserving the old owner on failure. */
@@ -230,6 +261,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         notify_enabled = false;
         link_secured = false;
         enrollment_conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
+        if (tx_task_handle != NULL) xTaskNotifyGive(tx_task_handle);
         advertise();
         return 0;
 
@@ -237,6 +269,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (event->subscribe.attr_handle == tx_value_handle) {
             notify_enabled = event->subscribe.cur_notify != 0;
         }
+        return 0;
+
+    case BLE_GAP_EVENT_NOTIFY_TX:
+        if (tx_task_handle != NULL) xTaskNotifyGive(tx_task_handle);
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -284,11 +320,49 @@ static void host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
+static void tx_task(void *param)
+{
+    (void)param;
+    uint8_t slot_index;
+
+    for (;;) {
+        if (xQueueReceive(tx_queue, &slot_index, portMAX_DELAY) != pdTRUE) continue;
+
+        ble_tx_slot_t *slot = &tx_slots[slot_index];
+        size_t offset = 0;
+        while (offset < slot->len && conn_handle == slot->conn_handle &&
+               notify_enabled && link_secured) {
+            const uint16_t mtu = ble_att_mtu(slot->conn_handle);
+            size_t chunk_max = mtu > 3 ? (size_t)(mtu - 3) : 20u;
+            if (chunk_max > 512u) chunk_max = 512u;
+            const size_t remaining = slot->len - offset;
+            const size_t chunk_len = remaining < chunk_max ? remaining : chunk_max;
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(slot->data + offset, chunk_len);
+            const int rc = om == NULL ? BLE_HS_ENOMEM :
+                ble_gatts_notify_custom(slot->conn_handle, tx_value_handle, om);
+
+            if (rc == BLE_HS_ENOMEM) {
+                /* A notify completion wakes us as soon as NimBLE frees buffers. */
+                (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+                continue;
+            }
+            if (rc != 0) break;
+            offset += chunk_len;
+        }
+
+        (void)xQueueSend(tx_free_queue, &slot_index, portMAX_DELAY);
+    }
+}
+
 esp_err_t cits_ble_init(cits_ble_rx_callback_t callback)
 {
     rx_callback = callback;
-    tx_mutex = xSemaphoreCreateMutex();
-    if (tx_mutex == NULL) return ESP_ERR_NO_MEM;
+    tx_free_queue = xQueueCreate(CITS_BLE_TX_QUEUE_DEPTH, sizeof(uint8_t));
+    tx_queue = xQueueCreate(CITS_BLE_TX_QUEUE_DEPTH, sizeof(uint8_t));
+    if (tx_free_queue == NULL || tx_queue == NULL) return ESP_ERR_NO_MEM;
+    for (uint8_t i = 0; i < CITS_BLE_TX_QUEUE_DEPTH; ++i) {
+        if (xQueueSend(tx_free_queue, &i, 0) != pdTRUE) return ESP_FAIL;
+    }
 
     esp_err_t err = nimble_port_init();
     if (err != ESP_OK) return err;
@@ -313,6 +387,9 @@ esp_err_t cits_ble_init(cits_ble_rx_callback_t callback)
     if (rc != 0) return ESP_FAIL;
 
     ble_store_config_init();
+    if (xTaskCreate(tx_task, "cits_ble_tx", 4096, NULL, 3, &tx_task_handle) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
     nimble_port_freertos_init(host_task);
     return ESP_OK;
 }
@@ -332,33 +409,18 @@ esp_err_t cits_ble_begin_enrollment(void)
 
 void cits_ble_write(const uint8_t *data, size_t len)
 {
-    if (data == NULL || len == 0 || tx_mutex == NULL) return;
-    xSemaphoreTake(tx_mutex, portMAX_DELAY);
+    const uint16_t handle = conn_handle;
+    if (data == NULL || len == 0 || len > CITS_BLE_MAX_WRITE_LEN ||
+        handle == CITS_BLE_INVALID_CONN_HANDLE || !notify_enabled || !link_secured) return;
 
-    size_t offset = 0;
-    while (offset < len) {
-        const uint16_t handle = conn_handle;
-        if (handle == CITS_BLE_INVALID_CONN_HANDLE || !notify_enabled || !link_secured) break;
+    uint8_t slot_index;
+    if (xQueueReceive(tx_free_queue, &slot_index, 0) != pdTRUE) return;
 
-        uint16_t mtu = ble_att_mtu(handle);
-        size_t chunk_max = mtu > 3 ? (size_t)(mtu - 3) : 20u;
-        if (chunk_max > 512u) chunk_max = 512u;
-        const size_t chunk_len = (len - offset < chunk_max) ? len - offset : chunk_max;
-
-        int rc;
-        do {
-            struct os_mbuf *om = ble_hs_mbuf_from_flat(data + offset, chunk_len);
-            if (om == NULL) {
-                rc = BLE_HS_ENOMEM;
-            } else {
-                rc = ble_gatts_notify_custom(handle, tx_value_handle, om);
-            }
-            if (rc == BLE_HS_ENOMEM) vTaskDelay(pdMS_TO_TICKS(CITS_BLE_NOTIFY_RETRY_MS));
-        } while (rc == BLE_HS_ENOMEM && conn_handle == handle && notify_enabled && link_secured);
-
-        if (rc != 0) break;
-        offset += chunk_len;
+    ble_tx_slot_t *slot = &tx_slots[slot_index];
+    slot->conn_handle = handle;
+    slot->len = (uint16_t)len;
+    memcpy(slot->data, data, len);
+    if (xQueueSend(tx_queue, &slot_index, 0) != pdTRUE) {
+        (void)xQueueSend(tx_free_queue, &slot_index, 0);
     }
-
-    xSemaphoreGive(tx_mutex);
 }

@@ -245,8 +245,8 @@ static void transport_write_all(const uint8_t *data, size_t len)
 {
     xSemaphoreTake(serial_write_mutex, portMAX_DELAY);
     serial_write_all_locked(data, len);
-    xSemaphoreGive(serial_write_mutex);
     cits_ble_write(data, len);
+    xSemaphoreGive(serial_write_mutex);
 }
 
 static void write_packet_record(const packet_slot_t *slot)
@@ -309,8 +309,8 @@ static void write_tx_result(uint32_t request_id, esp_err_t status, uint16_t pack
     const size_t encoded_len = cobs_encode_to(decoded, frame_without_crc_len + CITS_FRAME_TRAILER_LEN, encoded);
     encoded[encoded_len] = 0;
     serial_write_all_locked(encoded, encoded_len + 1);
-    xSemaphoreGive(serial_write_mutex);
     cits_ble_write(encoded, encoded_len + 1);
+    xSemaphoreGive(serial_write_mutex);
 }
 
 static void write_ble_enroll_result(esp_err_t status)
