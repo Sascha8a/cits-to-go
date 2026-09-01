@@ -1,0 +1,70 @@
+{
+  "nodes": {
+    "esp-idf": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1761289294,
+        "narHash": "sha256-3T4tqGWdnikYmyxGDnRhW29mI9faoNciodlHCoBqdVA=",
+        "ref": "refs/heads/master",
+        "rev": "f21b4c238152dc9e3a24fbad9afe33a3d15f6cfd",
+        "shallow": true,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/espressif/esp-idf.git"
+      },
+      "original": {
+        "rev": "f21b4c238152dc9e3a24fbad9afe33a3d15f6cfd",
+        "shallow": true,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/espressif/esp-idf.git"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1788187754,
+        "narHash": "sha256-bu1QxmXKmPuvBLN7bHP355OV9Qo13x9WCiRDH62CqRM=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "5dfba6236110080a54247d6460bc2ff5dda939cc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "5dfba6236110080a54247d6460bc2ff5dda939cc",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "esp-idf": "esp-idf",
+        "nixpkgs": "nixpkgs",
+        "rust-overlay": "rust-overlay"
+      }
+    },
+    "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788248235,
+        "narHash": "sha256-siCQqLbY7AbZ9V3oyc65K8bhNr7QgZTXoqLTws3pv0s=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "6a84c41e705533dcc5569ac0731f18406b4cdf86",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "6a84c41e705533dcc5569ac0731f18406b4cdf86",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

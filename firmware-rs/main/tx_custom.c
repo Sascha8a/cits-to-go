@@ -137,7 +137,7 @@ esp_err_t cits_wifi_80211_tx(
         txdesc->field_10 =
             (txdesc->field_10 & 0xfff3ffff) | (((uint32_t)ifx & WIFI_IF_MAX) << 0x12);
         txdesc->field_14 = 0x100;
-        (void)ieee80211_post_hmac_tx(eb);
+        result = ieee80211_post_hmac_tx(eb);
     }
     g_osi_funcs_p->_mutex_unlock(g_wifi_global_lock);
     return result;

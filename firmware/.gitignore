@@ -1,7 +1,0 @@
-/build/
-/managed_components/
-/.qtcreator/
-/dependencies.lock
-/sdkconfig
-/sdkconfig.old
-*.pcap

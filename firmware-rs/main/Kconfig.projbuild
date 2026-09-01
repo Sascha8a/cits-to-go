@@ -18,7 +18,7 @@ menu "CITS-to-go Configuration"
     config CITS_PACKET_POOL_SIZE
         int "Packet buffer pool size"
         range 4 64
-        default 16
+        default 8
         help
             Number of fixed packet buffers available to the Wi-Fi receive
             callback.
@@ -33,7 +33,7 @@ menu "CITS-to-go Configuration"
     config CITS_TX_POOL_SIZE
         int "Transmit request buffer pool size"
         range 2 32
-        default 8
+        default 4
         help
             Number of bounded raw 802.11 transmit requests that can wait for
             the radio. A full queue is reported to Android as ESP_ERR_NO_MEM.

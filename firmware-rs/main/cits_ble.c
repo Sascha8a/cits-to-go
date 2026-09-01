@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -37,8 +38,9 @@
 
 typedef struct {
     uint16_t conn_handle;
+    uint32_t epoch;
     uint16_t len;
-    uint8_t data[CITS_BLE_MAX_WRITE_LEN];
+    uint8_t data[CITS_BLE_MAX_WRITE_LEN + 1];
 } ble_tx_slot_t;
 
 /* ESP-IDF's NimBLE examples expose the persistent-store initializer this way. */
@@ -67,15 +69,20 @@ static QueueHandle_t tx_queue;
 static TaskHandle_t tx_task_handle;
 static ble_tx_slot_t tx_slots[CITS_BLE_TX_QUEUE_DEPTH];
 static uint16_t tx_value_handle;
-static volatile uint16_t conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
-static volatile bool notify_enabled;
-static volatile bool link_secured;
-static volatile bool enrollment_armed;
-static volatile int64_t enrollment_deadline_us;
-static volatile uint16_t enrollment_conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
+static _Atomic uint16_t conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
+static _Atomic bool notify_enabled;
+static _Atomic bool link_secured;
+static bool enrollment_armed;
+static int64_t enrollment_deadline_us;
+static uint16_t enrollment_conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
 static uint8_t own_addr_type;
 
 static void advertise(void);
+static void enroll_on_host(struct ble_npl_event *event);
+static struct ble_npl_event enroll_event;
+static _Atomic uint32_t connection_epoch;
+void cits_rs_enroll_done(int32_t status);
+void cits_platform_ble_disconnected(void);
 
 static void request_fast_connection(uint16_t handle)
 {
@@ -135,7 +142,9 @@ static int gatt_access(uint16_t connection_handle, uint16_t attr_handle,
     if (ble_hs_mbuf_to_flat(ctxt->om, buffer, sizeof(buffer), &copied) != 0) {
         return BLE_ATT_ERR_UNLIKELY;
     }
-    if (rx_callback != NULL && copied > 0) rx_callback(buffer, copied);
+    if (!link_secured || connection_handle != conn_handle) return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+    if (rx_callback != NULL && copied > 0 && !rx_callback(buffer, copied))
+        return BLE_ATT_ERR_INSUFFICIENT_RES;
     return 0;
 }
 
@@ -187,7 +196,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (peer_is_bonded(&desc.peer_id_addr)) {
             /* Re-enrolling the existing owner is harmless and consumes the
              * temporary enrollment window without replacing its bond. */
-            if (enrollment_armed) {
+            if (enrollment_armed && esp_timer_get_time() <= enrollment_deadline_us) {
                 enrollment_armed = false;
                 enrollment_deadline_us = 0;
                 enrollment_conn_handle = event->connect.conn_handle;
@@ -257,6 +266,8 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         return BLE_GAP_REPEAT_PAIRING_IGNORE;
 
     case BLE_GAP_EVENT_DISCONNECT:
+        atomic_fetch_add(&connection_epoch, 1);
+        cits_platform_ble_disconnected();
         conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
         notify_enabled = false;
         link_secured = false;
@@ -330,8 +341,9 @@ static void tx_task(void *param)
 
         ble_tx_slot_t *slot = &tx_slots[slot_index];
         size_t offset = 0;
+        int64_t last_progress = esp_timer_get_time();
         while (offset < slot->len && conn_handle == slot->conn_handle &&
-               notify_enabled && link_secured) {
+               notify_enabled && link_secured && slot->epoch == atomic_load(&connection_epoch)) {
             const uint16_t mtu = ble_att_mtu(slot->conn_handle);
             size_t chunk_max = mtu > 3 ? (size_t)(mtu - 3) : 20u;
             if (chunk_max > 512u) chunk_max = 512u;
@@ -343,11 +355,21 @@ static void tx_task(void *param)
 
             if (rc == BLE_HS_ENOMEM) {
                 /* A notify completion wakes us as soon as NimBLE frees buffers. */
-                (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+                if (esp_timer_get_time() - last_progress >= 1000000) {
+                    (void)ble_gap_terminate(slot->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+                    break;
+                }
+                (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
                 continue;
             }
-            if (rc != 0) break;
+            if (rc != 0) {
+                // A partial COBS frame cannot be resumed safely. Force a fresh
+                // stream rather than concatenate its tail with the next record.
+                (void)ble_gap_terminate(slot->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+                break;
+            }
             offset += chunk_len;
+            last_progress = esp_timer_get_time();
         }
 
         (void)xQueueSend(tx_free_queue, &slot_index, portMAX_DELAY);
@@ -366,6 +388,7 @@ esp_err_t cits_ble_init(cits_ble_rx_callback_t callback)
 
     esp_err_t err = nimble_port_init();
     if (err != ESP_OK) return err;
+    ble_npl_event_init(&enroll_event, enroll_on_host, NULL);
 
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
@@ -394,8 +417,15 @@ esp_err_t cits_ble_init(cits_ble_rx_callback_t callback)
     return ESP_OK;
 }
 
-esp_err_t cits_ble_begin_enrollment(void)
+void cits_ble_begin_enrollment(void)
 {
+    // Enrollment and all bond-store operations run on the NimBLE host task.
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &enroll_event);
+}
+
+static void enroll_on_host(struct ble_npl_event *event)
+{
+    (void)event;
     if (conn_handle != CITS_BLE_INVALID_CONN_HANDLE) {
         (void)ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
@@ -404,23 +434,31 @@ esp_err_t cits_ble_begin_enrollment(void)
     enrollment_conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
     enrollment_deadline_us = esp_timer_get_time() + CITS_BLE_ENROLLMENT_WINDOW_US;
     enrollment_armed = true;
-    return ESP_OK;
+    cits_rs_enroll_done(ESP_OK);
 }
 
-void cits_ble_write(const uint8_t *data, size_t len)
+bool cits_ble_write(const uint8_t *data, size_t len, bool control)
 {
+    const uint32_t epoch = atomic_load(&connection_epoch);
     const uint16_t handle = conn_handle;
     if (data == NULL || len == 0 || len > CITS_BLE_MAX_WRITE_LEN ||
-        handle == CITS_BLE_INVALID_CONN_HANDLE || !notify_enabled || !link_secured) return;
+        handle == CITS_BLE_INVALID_CONN_HANDLE || !notify_enabled || !link_secured) return true;
 
     uint8_t slot_index;
-    if (xQueueReceive(tx_free_queue, &slot_index, 0) != pdTRUE) return;
+    if ((!control && uxQueueMessagesWaiting(tx_free_queue) <= 2) ||
+        xQueueReceive(tx_free_queue, &slot_index, 0) != pdTRUE) return false;
 
     ble_tx_slot_t *slot = &tx_slots[slot_index];
     slot->conn_handle = handle;
-    slot->len = (uint16_t)len;
-    memcpy(slot->data, data, len);
+    slot->epoch = epoch;
+    // An empty record before every frame also repairs a subscribe-off/on
+    // transition that abandoned a partly emitted record on this connection.
+    slot->len = (uint16_t)(len + 1);
+    slot->data[0] = 0;
+    memcpy(slot->data + 1, data, len);
     if (xQueueSend(tx_queue, &slot_index, 0) != pdTRUE) {
         (void)xQueueSend(tx_free_queue, &slot_index, 0);
+        return false;
     }
+    return true;
 }

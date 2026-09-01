@@ -1,0 +1,30 @@
+[package]
+name = "cits-to-go-firmware"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = []
+firmware = ["dep:embassy-executor", "dep:embassy-sync", "dep:embassy-futures", "dep:critical-section", "dep:static_cell"]
+
+[dependencies]
+embassy-executor = { version = "=0.7.0", default-features = false, features = ["task-arena-size-16384"], optional = true }
+embassy-sync = { version = "=0.6.2", optional = true }
+embassy-futures = { version = "=0.1.1", optional = true }
+critical-section = { version = "=1.2.0", features = ["restore-state-u32"], optional = true }
+static_cell = { version = "=2.1.1", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+debug = 1
+
+[profile.dev]
+panic = "abort"

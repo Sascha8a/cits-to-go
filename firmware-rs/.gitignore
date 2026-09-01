@@ -1,0 +1,6 @@
+/target/
+/build*/
+/sdkconfig
+/sdkconfig.old
+/dist/
+__pycache__/
