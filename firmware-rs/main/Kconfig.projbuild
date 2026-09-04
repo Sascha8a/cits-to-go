@@ -23,6 +23,16 @@ menu "CITS-to-go Configuration"
             Number of fixed packet buffers available to the Wi-Fi receive
             callback.
 
+    config CITS_BLE_OUTPUT_SLOTS
+        int "Bluetooth output frame slots"
+        range 6 24
+        default 12
+        help
+            Number of encoded CTG1 frames that can wait for the BLE link.
+            This is deliberately independent from the Wi-Fi receive pool so a
+            short BLE scheduling stall does not immediately become capture loss.
+            Two slots are reserved for control / transmit-result frames.
+
     config CITS_MAX_PACKET_BYTES
         int "Maximum captured packet bytes"
         range 512 4096

@@ -42,6 +42,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -71,6 +72,7 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
@@ -111,6 +113,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.opentrafficmap.citstogo.bridge.BluetoothEnrollment
+import org.opentrafficmap.citstogo.bridge.BleDebugParameters
 import org.opentrafficmap.citstogo.bridge.BridgeStatus
 import org.opentrafficmap.citstogo.bridge.CitsBridgeService
 import org.opentrafficmap.citstogo.bridge.ConnectionMode
@@ -142,6 +145,7 @@ import org.opentrafficmap.citstogo.intersection.placeCountdownLabel
 import org.opentrafficmap.citstogo.intersection.roadConnectionControlPoints
 import org.opentrafficmap.citstogo.intersection.secondsUntilChange
 import org.opentrafficmap.citstogo.intersection.resolveSremLaneDirection
+import org.opentrafficmap.citstogo.protocol.FirmwareStatistics
 import org.opentrafficmap.citstogo.srem.SremProfile
 import org.opentrafficmap.citstogo.srem.estimateSremRequestTimeMs
 import org.opentrafficmap.citstogo.ui.DragConfirmDirection
@@ -187,6 +191,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var sremProfile by mutableStateOf(SremProfile.PEDESTRIAN)
     private var camIntervalMs by mutableStateOf(CitsBridgeService.DEFAULT_CAM_INTERVAL_MS.toString())
     private var txApproved by mutableStateOf(false)
+    private var debugMenuEnabled by mutableStateOf(false)
     private var txApprovalPromptState by mutableStateOf(TxApprovalPromptState.Hidden)
     private var enableCamAfterPermission = false
     private var wantsIntersectionLocation = false
@@ -323,12 +328,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 replayPackets = intent.getLongExtra(CitsBridgeService.EXTRA_REPLAY_PACKETS, 0),
                 discoveredDevices = intent.getLongExtra(CitsBridgeService.EXTRA_DISCOVERED_DEVICES, 0),
                 truncated = intent.getLongExtra(CitsBridgeService.EXTRA_TRUNCATED, 0),
+                transportDropped = intent.getLongExtra(CitsBridgeService.EXTRA_TRANSPORT_DROPPED, 0),
                 protocolErrors = intent.getLongExtra(CitsBridgeService.EXTRA_PROTOCOL_ERRORS, 0),
                 txRequested = intent.getLongExtra(CitsBridgeService.EXTRA_TX_REQUESTED, 0),
                 txSuccessful = intent.getLongExtra(CitsBridgeService.EXTRA_TX_SUCCESSFUL, 0),
                 txFailed = intent.getLongExtra(CitsBridgeService.EXTRA_TX_FAILED, 0),
                 camEnabled = intent.getBooleanExtra(CitsBridgeService.EXTRA_CAM_ENABLED, false),
                 camSent = intent.getLongExtra(CitsBridgeService.EXTRA_CAM_SENT, 0),
+                firmwareStatistics = intent.serializableExtra<FirmwareStatistics>(CitsBridgeService.EXTRA_FIRMWARE_STATISTICS),
+                bleDebugParameters = intent.serializableExtra<BleDebugParameters>(CitsBridgeService.EXTRA_BLE_DEBUG_PARAMETERS),
                 lastSremState = intent.getStringExtra(CitsBridgeService.EXTRA_SREM_STATE).orEmpty(),
                 lastSremSummary = intent.getStringExtra(CitsBridgeService.EXTRA_SREM_SUMMARY).orEmpty(),
                 lastSremRequestId = intent.getIntExtra(CitsBridgeService.EXTRA_SREM_REQUEST_ID, -1),
@@ -361,6 +369,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         val prefs = getSharedPreferences(CitsBridgeService.PREFS, MODE_PRIVATE)
         connectionMode = ConnectionMode.fromWireValue(prefs.getString(PREF_CONNECTION_MODE, null))
         txApproved = prefs.getBoolean(CitsBridgeService.PREF_TX_APPROVED, false)
+        debugMenuEnabled = prefs.getBoolean(PREF_DEBUG_MENU_ENABLED, false)
         intersectionSortMode = IntersectionSortMode.fromPreference(
             prefs.getString(PREF_INTERSECTION_SORT_MODE, null),
         )
@@ -447,6 +456,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     sremProfile = sremProfile,
                     onSremProfileChange = { sremProfile = it },
                     txApproved = txApproved,
+                    debugMenuEnabled = debugMenuEnabled,
+                    onDebugMenuEnabledChange = { enabled ->
+                        debugMenuEnabled = enabled
+                        getSharedPreferences(CitsBridgeService.PREFS, MODE_PRIVATE).edit()
+                            .putBoolean(PREF_DEBUG_MENU_ENABLED, enabled)
+                            .apply()
+                    },
                     txApprovalPromptState = txApprovalPromptState,
                     onGrantTxApproval = ::grantTxApproval,
                     onDismissTxApproval = { txApprovalPromptState = TxApprovalPromptState.Hidden },
@@ -1239,6 +1255,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     companion object {
         private const val PREF_CONNECTION_MODE = "connectionMode"
         private const val PREF_INTERSECTION_SORT_MODE = "intersection_sort_mode"
+        private const val PREF_DEBUG_MENU_ENABLED = "debug_menu_enabled"
         private const val INTERSECTION_LOCATION_MIN_TIME_MS = 500L
         private const val TX_SHAKE_THRESHOLD_G = 2.7f
         private const val TX_SHAKE_COOLDOWN_MS = 1_200L
@@ -1352,6 +1369,8 @@ private fun CitsApp(
     sremProfile: SremProfile,
     onSremProfileChange: (SremProfile) -> Unit,
     txApproved: Boolean,
+    debugMenuEnabled: Boolean,
+    onDebugMenuEnabledChange: (Boolean) -> Unit,
     txApprovalPromptState: TxApprovalPromptState,
     onGrantTxApproval: () -> Unit,
     onDismissTxApproval: () -> Unit,
@@ -1372,10 +1391,10 @@ private fun CitsApp(
     var sliderDragging by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val visiblePages = remember(txApproved) {
-        AppPage.entries.filter { it.visibleWithTxApproval(txApproved) }
+    val visiblePages = remember(txApproved, debugMenuEnabled) {
+        AppPage.entries.filter { it.visible(txApproved, debugMenuEnabled) }
     }
-    LaunchedEffect(txApproved) {
+    LaunchedEffect(txApproved, debugMenuEnabled) {
         if (selectedPage !in visiblePages) selectedPage = AppPage.Home
     }
     LaunchedEffect(selectedPage) {
@@ -1508,6 +1527,8 @@ private fun CitsApp(
                             bluetoothEnrollmentRunning = bluetoothEnrollmentRunning,
                             bluetoothEnrollmentMessage = bluetoothEnrollmentMessage,
                             bluetoothEnrollmentError = bluetoothEnrollmentError,
+                            debugMenuEnabled = debugMenuEnabled,
+                            onDebugMenuEnabledChange = onDebugMenuEnabledChange,
                             onEnrollBluetooth = onEnrollBluetooth,
                             onRevokeTxApproval = onRevokeTxApproval,
                             onSave = { updatedMqttUri, updatedNodeId, updatedMaxQueueLength, updatedMaxQueueAgeSeconds, updatedSremProfile ->
@@ -1524,6 +1545,10 @@ private fun CitsApp(
                                     updatedSremProfile,
                                 )
                             },
+                        )
+                        AppPage.Debug -> DebugPage(
+                            status = status,
+                            connectionMode = connectionMode,
                         )
                         AppPage.About -> AboutPage()
                     }
@@ -1554,11 +1579,13 @@ private enum class AppPage(val title: String) {
     IntersectionView("Intersection View"),
     Flashing("Flashing"),
     Settings("Settings"),
+    Debug("Debug"),
     About("About"),
     ;
 
-    fun visibleWithTxApproval(txApproved: Boolean): Boolean = when (this) {
+    fun visible(txApproved: Boolean, debugMenuEnabled: Boolean): Boolean = when (this) {
         CamBroadcast -> txApproved
+        Debug -> debugMenuEnabled
         else -> true
     }
 }
@@ -3419,6 +3446,153 @@ private fun ConfigPanel(
 }
 
 @Composable
+private fun DebugPage(
+    status: BridgeStatus,
+    connectionMode: ConnectionMode,
+) {
+    val stats = status.firmwareStatistics
+    val androidBle = status.bleDebugParameters
+
+    DebugSection("Android stream") {
+        DebugRow("Connection", connectionMode.label)
+        DebugRow("State", status.usbState)
+        DebugRow("Received captures", status.packets.toString())
+        DebugRow("Stream gaps", status.transportDropped.toString())
+        DebugRow("Protocol errors", status.protocolErrors.toString())
+        Text(
+            "Stream gaps are inferred from CTG capture sequence numbers. A zero value means no loss was observed after the firmware assigned a capture sequence.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.secondary,
+        )
+    }
+
+    DebugSection("Firmware rates (1 Hz)") {
+        if (stats == null) {
+            Text(
+                if (status.running) "Waiting for firmware statistics…" else "Connect to the firmware to receive statistics.",
+                color = MaterialTheme.colorScheme.secondary,
+            )
+        } else {
+            DebugRow("Eligible Wi-Fi RX", "${stats.wifiRxPacketsPerSecond} packets/s")
+            DebugRow("Accepted captures", "${stats.capturedPacketsPerSecond} packets/s")
+            DebugRow(
+                "Pre-sequence loss",
+                "${(stats.wifiRxPacketsPerSecond - stats.capturedPacketsPerSecond).coerceAtLeast(0L)} packets/s",
+            )
+            DebugRow("USB capture TX", "${stats.usbCapturePacketsPerSecond} packets/s")
+            DebugRow("BLE capture TX", "${stats.bleCapturePacketsPerSecond} packets/s")
+            DebugRow("USB stream", formatRateBytes(stats.usbBytesPerSecond))
+            DebugRow("BLE stream", formatRateBytes(stats.bleBytesPerSecond))
+            DebugRow("BLE notifications", "${stats.bleNotificationsPerSecond}/s")
+            DebugRow("Sample period", "${stats.sampleMs} ms")
+            DebugRow("Firmware uptime", formatDurationMs(stats.uptimeMs))
+        }
+    }
+
+    DebugSection("Firmware drops and queues") {
+        if (stats == null) {
+            Text("No firmware statistics received yet.", color = MaterialTheme.colorScheme.secondary)
+        } else {
+            DebugRow("RX pool exhausted", stats.rxNoBufferTotal.toString())
+            DebugRow("RX too large", stats.rxTooLargeTotal.toString())
+            DebugRow("USB capture drops", stats.usbOutputDropsTotal.toString())
+            DebugRow("BLE capture drops", stats.bleOutputDropsTotal.toString())
+            DebugRow("USB partial writes", stats.usbPartialWriteDropsTotal.toString())
+            DebugRow("BLE notify failures", stats.bleNotifyFailuresTotal.toString())
+            DebugRow("BLE input drops", stats.bleInputDropsTotal.toString())
+            DebugRow("USB output queue", "${stats.usbQueueDepth}/${stats.usbQueueCapacity}")
+            DebugRow("BLE output queue", "${stats.bleQueueDepth}/${stats.bleQueueCapacity}")
+            DebugRow("Eligible Wi-Fi RX total", stats.wifiRxPacketsTotal.toString())
+            DebugRow("Accepted total", stats.capturedPacketsTotal.toString())
+            DebugRow("USB capture total", stats.usbCapturePacketsTotal.toString())
+            DebugRow("BLE capture total", stats.bleCapturePacketsTotal.toString())
+        }
+    }
+
+    DebugSection("Bluetooth parameters") {
+        if (androidBle == null && stats?.bleConnected != true) {
+            Text("Bluetooth is not connected.", color = MaterialTheme.colorScheme.secondary)
+        }
+        androidBle?.let { ble ->
+            Text("Android", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            if (ble.deviceAddress.isNotBlank()) DebugRow("Device", ble.deviceAddress)
+            DebugRow("ATT MTU", ble.mtu.toString())
+            DebugRow("TX PHY", blePhyLabel(ble.txPhy))
+            DebugRow("RX PHY", blePhyLabel(ble.rxPhy))
+            DebugRow("High priority requested", yesNo(ble.highPriorityRequested))
+            DebugRow("2M PHY requested", yesNo(ble.preferred2MPhyRequested))
+            DebugRow("Queued Android notifications", ble.queuedNotifications.toString())
+        }
+        stats?.takeIf { it.bleConnected }?.let { fw ->
+            if (androidBle != null) HorizontalDivider()
+            Text("Firmware / NimBLE", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            DebugRow("Connected", yesNo(fw.bleConnected))
+            DebugRow("Secured", yesNo(fw.bleSecured))
+            DebugRow("Notifications enabled", yesNo(fw.bleNotificationsEnabled))
+            DebugRow("ATT MTU", fw.bleMtu.toString())
+            DebugRow("Connection interval", fw.bleConnectionIntervalMs?.let { String.format(Locale.US, "%.2f ms", it) } ?: "—")
+            DebugRow("Peripheral latency", fw.bleConnectionLatency.toString())
+            DebugRow("Supervision timeout", fw.bleSupervisionTimeoutMs?.let { "$it ms" } ?: "—")
+            DebugRow("TX PHY", blePhyLabel(fw.bleTxPhy))
+            DebugRow("RX PHY", blePhyLabel(fw.bleRxPhy))
+        }
+    }
+}
+
+@Composable
+private fun DebugSection(
+    title: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color.White, RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        content()
+    }
+}
+
+@Composable
+private fun DebugRow(label: String, value: String) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(label, color = MaterialTheme.colorScheme.secondary, modifier = Modifier.weight(1f))
+        Text(value, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 12.dp))
+    }
+}
+
+private fun blePhyLabel(phy: Int): String = when (phy) {
+    1 -> "LE 1M"
+    2 -> "LE 2M"
+    3 -> "LE Coded"
+    0 -> "Unknown"
+    else -> "Unknown ($phy)"
+}
+
+private fun yesNo(value: Boolean): String = if (value) "Yes" else "No"
+
+private fun formatRateBytes(bytesPerSecond: Long): String = when {
+    bytesPerSecond >= 1_000_000L -> String.format(Locale.US, "%.2f MB/s", bytesPerSecond / 1_000_000.0)
+    bytesPerSecond >= 1_000L -> String.format(Locale.US, "%.1f kB/s", bytesPerSecond / 1_000.0)
+    else -> "$bytesPerSecond B/s"
+}
+
+private fun formatDurationMs(ms: Long): String {
+    val totalSeconds = ms / 1_000L
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds) else "%d:%02d".format(minutes, seconds)
+}
+
+@Composable
 private fun SettingsPage(
     mqttUri: String,
     nodeId: String,
@@ -3430,6 +3604,8 @@ private fun SettingsPage(
     bluetoothEnrollmentRunning: Boolean,
     bluetoothEnrollmentMessage: String,
     bluetoothEnrollmentError: Boolean,
+    debugMenuEnabled: Boolean,
+    onDebugMenuEnabledChange: (Boolean) -> Unit,
     onEnrollBluetooth: () -> Unit,
     onRevokeTxApproval: () -> Unit,
     onSave: (String, String, String, String, SremProfile) -> Unit,
@@ -3521,6 +3697,25 @@ private fun SettingsPage(
                 bluetoothEnrollmentMessage,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (bluetoothEnrollmentError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
+            )
+        }
+        HorizontalDivider()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("Debug menu", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Show firmware and transport diagnostics in the navigation drawer.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            }
+            Switch(
+                checked = debugMenuEnabled,
+                onCheckedChange = onDebugMenuEnabledChange,
             )
         }
         Button(
@@ -3670,11 +3865,14 @@ private fun Metrics(status: BridgeStatus) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             MetricCard("Errors", status.protocolErrors.toString(), Modifier.weight(1f))
-            MetricCard("TX sent", status.txSuccessful.toString(), Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            MetricCard("TX sent", status.txSuccessful.toString(), Modifier.weight(1f))
             MetricCard("TX failed", status.txFailed.toString(), Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             MetricCard("CAM sent", status.camSent.toString(), Modifier.weight(1f))
+            MetricCard("TX requested", status.txRequested.toString(), Modifier.weight(1f))
         }
         if (status.lastPacketSummary.isNotBlank()) {
             Text("Last packet: ${status.lastPacketSummary}", style = MaterialTheme.typography.bodyMedium)

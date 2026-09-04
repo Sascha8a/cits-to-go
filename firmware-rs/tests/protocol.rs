@@ -255,3 +255,63 @@ fn arbitrary_malformed_streams_never_panic_and_resynchronize() {
     let valid = frame(tx_raw(1, &[1]));
     assert!(valid.iter().any(|&b| d.push(b).is_some()));
 }
+
+#[test]
+fn statistics_layout_and_crc_are_stable() {
+    let stats = Statistics {
+        uptime_ms: 123_456,
+        sample_ms: 1_000,
+        wifi_rx_pps: 77,
+        capture_pps: 75,
+        usb_capture_tx_pps: 74,
+        ble_capture_tx_pps: 73,
+        usb_bytes_per_sec: 45_000,
+        ble_bytes_per_sec: 41_000,
+        ble_notifications_per_sec: 92,
+        rx_no_buffer_total: 2,
+        rx_too_large_total: 3,
+        ble_input_drops_total: 4,
+        usb_output_drops_total: 5,
+        ble_output_drops_total: 6,
+        usb_partial_write_drops_total: 7,
+        ble_notify_failures_total: 8,
+        wifi_rx_packets_total: 9_000,
+        capture_packets_total: 8_900,
+        usb_capture_packets_total: 8_800,
+        ble_capture_packets_total: 8_700,
+        flags: STATS_USB_CONNECTED | STATS_BLE_CONNECTED | STATS_BLE_SECURED,
+        usb_queue_depth: 1,
+        usb_queue_capacity: 4,
+        ble_queue_depth: 2,
+        ble_queue_capacity: 12,
+        ble_mtu: 517,
+        ble_conn_interval: 6,
+        ble_conn_latency: 0,
+        ble_supervision_timeout: 400,
+        ble_tx_phy: 2,
+        ble_rx_phy: 2,
+    };
+    let mut out = [0; MAX_ENCODED];
+    let n = encode_statistics(&mut out, stats).unwrap();
+    let raw = decode(&out[..n]);
+    assert_eq!(&raw[..8], b"CTG1\x01\x06\x70\x00");
+    assert_eq!(raw.len(), STATISTICS_HEADER_LEN as usize + 4);
+    assert_eq!(
+        u32::from_le_bytes(raw[8..12].try_into().unwrap()),
+        stats.uptime_ms
+    );
+    assert_eq!(
+        u32::from_le_bytes(raw[16..20].try_into().unwrap()),
+        stats.wifi_rx_pps
+    );
+    assert_eq!(
+        u16::from_le_bytes(raw[100..102].try_into().unwrap()),
+        stats.ble_mtu
+    );
+    assert_eq!(raw[108], stats.ble_tx_phy);
+    assert_eq!(raw[109], stats.ble_rx_phy);
+    assert_eq!(
+        crc32(&raw[..raw.len() - 4]),
+        u32::from_le_bytes(raw[raw.len() - 4..].try_into().unwrap())
+    );
+}

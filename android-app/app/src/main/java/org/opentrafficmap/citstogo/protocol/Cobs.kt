@@ -31,6 +31,13 @@ object Cobs {
     fun decode(input: ByteArray, length: Int = input.size): ByteArray {
         require(length >= 0 && length <= input.size)
         val out = ByteArray(length)
+        val decodedLength = decodeInto(input, length, out)
+        return out.copyOf(decodedLength)
+    }
+
+    /** Decodes into caller-owned storage to avoid one temporary allocation per CTG frame. */
+    fun decodeInto(input: ByteArray, length: Int, out: ByteArray): Int {
+        require(length >= 0 && length <= input.size)
         var read = 0
         var write = 0
 
@@ -40,12 +47,14 @@ object Cobs {
                 throw IllegalArgumentException("Malformed COBS record")
             }
             repeat(code - 1) {
+                if (write >= out.size) throw IllegalArgumentException("Decoded COBS record exceeds output buffer")
                 out[write++] = input[read++]
             }
             if (code < 0xff && read < length) {
+                if (write >= out.size) throw IllegalArgumentException("Decoded COBS record exceeds output buffer")
                 out[write++] = 0
             }
         }
-        return out.copyOf(write)
+        return write
     }
 }

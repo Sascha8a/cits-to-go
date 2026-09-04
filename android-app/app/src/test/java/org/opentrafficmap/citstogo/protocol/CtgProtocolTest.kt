@@ -86,6 +86,75 @@ class CtgProtocolTest {
         assertArrayEquals(packet, result.packet)
     }
 
+    @Test
+    fun serialReaderDispatchesStatisticsWithoutTreatingThemAsCaptures() {
+        val decoded = ByteArray(CtgFrameDecoder.STATISTICS_HEADER_LEN + CtgFrameDecoder.CRC_LEN)
+        "CTG1".toByteArray(Charsets.US_ASCII).copyInto(decoded, 0)
+        decoded[4] = 1
+        decoded[5] = CtgFrameDecoder.TYPE_STATISTICS.toByte()
+        putU16(decoded, 6, CtgFrameDecoder.STATISTICS_HEADER_LEN)
+        putU32(decoded, 8 + 2 * 4, 64) // Wi-Fi RX packets/s.
+        putU32(decoded, 8 + 3 * 4, 63) // Accepted captures/s.
+        val crc = CRC32().apply { update(decoded, 0, decoded.size - CtgFrameDecoder.CRC_LEN) }.value
+        putU32(decoded, decoded.size - CtgFrameDecoder.CRC_LEN, crc)
+        val encoded = Cobs.encode(decoded) + byteArrayOf(0)
+
+        var captures = 0
+        var statistics: FirmwareStatistics? = null
+        var errors = 0
+        val reader = SerialPacketReader(
+            onPacket = { captures++ },
+            onTxResult = {},
+            onProtocolError = { errors++ },
+            onStatistics = { statistics = it },
+        )
+        reader.accept(encoded, encoded.size)
+
+        assertEquals(0, captures)
+        assertEquals(0, errors)
+        assertEquals(64L, statistics?.wifiRxPacketsPerSecond)
+        assertEquals(63L, statistics?.capturedPacketsPerSecond)
+    }
+
+    @Test
+    fun statisticsRecordDecodesAllRateAndBleFields() {
+        val decoded = ByteArray(CtgFrameDecoder.STATISTICS_HEADER_LEN + CtgFrameDecoder.CRC_LEN)
+        "CTG1".toByteArray(Charsets.US_ASCII).copyInto(decoded, 0)
+        decoded[4] = 1
+        decoded[5] = CtgFrameDecoder.TYPE_STATISTICS.toByte()
+        putU16(decoded, 6, CtgFrameDecoder.STATISTICS_HEADER_LEN)
+        val u32Values = longArrayOf(
+            123_000, 1_000, 77, 75, 74, 73, 45_000, 41_000, 92,
+            2, 3, 4, 5, 6, 7, 8, 9_000, 8_900, 8_800, 8_700,
+            FirmwareStatistics.FLAG_USB_CONNECTED or FirmwareStatistics.FLAG_BLE_CONNECTED or FirmwareStatistics.FLAG_BLE_SECURED,
+        )
+        var offset = 8
+        u32Values.forEach { value ->
+            putU32(decoded, offset, value)
+            offset += 4
+        }
+        intArrayOf(1, 4, 2, 12, 517, 6, 0, 400).forEach { value ->
+            putU16(decoded, offset, value)
+            offset += 2
+        }
+        decoded[108] = 2
+        decoded[109] = 2
+        val crc = CRC32().apply { update(decoded, 0, decoded.size - CtgFrameDecoder.CRC_LEN) }.value
+        putU32(decoded, decoded.size - CtgFrameDecoder.CRC_LEN, crc)
+
+        val frame = CtgFrameDecoder().decode(Cobs.encode(decoded)) as CtgInboundFrame.Statistics
+        val stats = frame.statistics
+        assertEquals(77L, stats.wifiRxPacketsPerSecond)
+        assertEquals(75L, stats.capturedPacketsPerSecond)
+        assertEquals(73L, stats.bleCapturePacketsPerSecond)
+        assertEquals(517, stats.bleMtu)
+        assertEquals(7.5, stats.bleConnectionIntervalMs!!, 0.001)
+        assertEquals(true, stats.usbConnected)
+        assertEquals(true, stats.bleConnected)
+        assertEquals(true, stats.bleSecured)
+        assertEquals(2, stats.bleTxPhy)
+    }
+
     private fun u16(bytes: ByteArray, offset: Int): Int =
         (bytes[offset].toInt() and 0xff) or ((bytes[offset + 1].toInt() and 0xff) shl 8)
 

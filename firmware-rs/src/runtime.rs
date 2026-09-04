@@ -23,11 +23,36 @@ unsafe extern "C" {
     fn cits_platform_wake();
     fn cits_platform_input_consumed();
     fn cits_platform_emit(data: *const u8, len: usize, control: bool, usb_only: bool) -> u32;
+    fn cits_platform_stats(out: *mut PlatformStats);
     fn cits_platform_tx(data: *const u8, len: usize, system_sequence: bool);
     fn cits_platform_enroll();
     fn cits_platform_led();
     fn cits_platform_enter() -> u32;
     fn cits_platform_exit(state: u32);
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct PlatformStats {
+    uptime_ms: u32,
+    usb_bytes_total: u32,
+    ble_bytes_total: u32,
+    ble_notifications_total: u32,
+    usb_partial_drops_total: u32,
+    ble_notify_failures_total: u32,
+    usb_capture_packets_total: u32,
+    ble_capture_packets_total: u32,
+    flags: u32,
+    usb_queue_depth: u32,
+    usb_queue_capacity: u32,
+    ble_queue_depth: u32,
+    ble_queue_capacity: u32,
+    ble_mtu: u32,
+    ble_conn_interval: u32,
+    ble_conn_latency: u32,
+    ble_supervision_timeout: u32,
+    ble_tx_phy: u32,
+    ble_rx_phy: u32,
 }
 
 struct CriticalSection;
@@ -111,9 +136,14 @@ static BLE_CHUNKS: Channel<Mutex, Lease<Chunk>, 4> = Channel::new();
 static BLE_EPOCH: AtomicU32 = AtomicU32::new(0);
 static ENROLL_DONE: Signal<Mutex, i32> = Signal::new();
 static TX_DONE: Signal<Mutex, i32> = Signal::new();
+static STATS_TICK: Signal<Mutex, ()> = Signal::new();
 
 // Symbols intentionally retained for debugger inspection without contaminating
 // the Android binary byte stream with logs.
+#[no_mangle]
+pub static CITS_WIFI_RX_PACKETS: AtomicU32 = AtomicU32::new(0);
+#[no_mangle]
+pub static CITS_CAPTURE_PACKETS: AtomicU32 = AtomicU32::new(0);
 #[no_mangle]
 pub static CITS_RX_NO_BUFFER: AtomicU32 = AtomicU32::new(0);
 #[no_mangle]
@@ -122,14 +152,44 @@ pub static CITS_RX_TOO_LARGE: AtomicU32 = AtomicU32::new(0);
 pub static CITS_BLE_INPUT_DROPS: AtomicU32 = AtomicU32::new(0);
 #[no_mangle]
 pub static CITS_OUTPUT_DROPS: AtomicU32 = AtomicU32::new(0);
+#[no_mangle]
+pub static CITS_USB_OUTPUT_DROPS: AtomicU32 = AtomicU32::new(0);
+#[no_mangle]
+pub static CITS_BLE_OUTPUT_DROPS: AtomicU32 = AtomicU32::new(0);
+#[no_mangle]
+pub static CITS_USB_CAPTURE_DROPS: AtomicU32 = AtomicU32::new(0);
+#[no_mangle]
+pub static CITS_BLE_CAPTURE_DROPS: AtomicU32 = AtomicU32::new(0);
 
-fn emit(bytes: &[u8], control: bool, usb_only: bool) {
-    let drops = unsafe { cits_platform_emit(bytes.as_ptr(), bytes.len(), control, usb_only) };
-    CITS_OUTPUT_DROPS.fetch_add(drops, Ordering::Relaxed);
+const EMIT_USB_DROPPED: u32 = 0x01;
+const EMIT_BLE_DROPPED: u32 = 0x02;
+const CAPTURE_BURST_BEFORE_YIELD: u8 = 4;
+const INPUT_BURST_BEFORE_YIELD: u8 = 4;
+
+fn emit(bytes: &[u8], control: bool, usb_only: bool) -> u32 {
+    let dropped = unsafe { cits_platform_emit(bytes.as_ptr(), bytes.len(), control, usb_only) };
+    if dropped & EMIT_USB_DROPPED != 0 {
+        CITS_USB_OUTPUT_DROPS.fetch_add(1, Ordering::Relaxed);
+        CITS_OUTPUT_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+    if dropped & EMIT_BLE_DROPPED != 0 {
+        CITS_BLE_OUTPUT_DROPS.fetch_add(1, Ordering::Relaxed);
+        CITS_OUTPUT_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+    dropped
+}
+fn emit_capture(bytes: &[u8]) {
+    let dropped = emit(bytes, false, false);
+    if dropped & EMIT_USB_DROPPED != 0 {
+        CITS_USB_CAPTURE_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+    if dropped & EMIT_BLE_DROPPED != 0 {
+        CITS_BLE_CAPTURE_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 fn result(out: &mut [u8], id: u32, status: i32, len: u16, packet: &[u8]) {
     let n = wire::encode_result(out, id, status, len, packet).expect("bounded TX result");
-    emit(&out[..n], true, false);
+    let _ = emit(&out[..n], true, false);
 }
 
 /// Called only by the Wi-Fi task, with a valid FCS-free slice for this call.
@@ -153,6 +213,7 @@ unsafe extern "C" fn cits_rs_capture(
     if config::BROADCAST_ONLY && !wire::is_broadcast(bytes) {
         return;
     }
+    CITS_WIFI_RX_PACKETS.fetch_add(1, Ordering::Relaxed);
     let Some(mut packet) = RX_POOL.try_acquire() else {
         CITS_RX_NO_BUFFER.fetch_add(1, Ordering::Relaxed);
         return;
@@ -168,6 +229,8 @@ unsafe extern "C" fn cits_rs_capture(
     // Queue capacity equals pool capacity, so an acquired slot always fits.
     if CAPTURES.try_send(packet).is_err() {
         CITS_RX_NO_BUFFER.fetch_add(1, Ordering::Relaxed);
+    } else {
+        CITS_CAPTURE_PACKETS.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -210,11 +273,16 @@ extern "C" fn cits_rs_enroll_done(status: i32) {
 extern "C" fn cits_rs_tx_done(status: i32) {
     TX_DONE.signal(status);
 }
+#[no_mangle]
+extern "C" fn cits_rs_statistics_tick() {
+    STATS_TICK.signal(());
+}
 
 #[embassy_executor::task]
 async fn captures() {
     let mut out = [0; MAX_ENCODED];
     let mut seq = 0u32;
+    let mut burst = 0u8;
     loop {
         let slot = CAPTURES.receive().await;
         let n = wire::encode_capture(
@@ -227,9 +295,13 @@ async fn captures() {
         .expect("bounded capture");
         seq = seq.wrapping_add(1);
         drop(slot); // Return scarce Wi-Fi memory before handing off to transports.
-        emit(&out[..n], false, false);
+        emit_capture(&out[..n]);
         unsafe { cits_platform_led() };
-        embassy_futures::yield_now().await;
+        burst += 1;
+        if burst == CAPTURE_BURST_BEFORE_YIELD {
+            burst = 0;
+            embassy_futures::yield_now().await;
+        }
     }
 }
 
@@ -239,6 +311,7 @@ async fn input(usb: bool) {
     let mut decoder = Decoder::new();
     let mut epoch = 0;
     let mut out = [0; MAX_ENCODED];
+    let mut burst = 0u8;
     loop {
         let chunk = queue.receive().await;
         // Epoch changes invalidate any partial old record. A fresh connection
@@ -270,7 +343,7 @@ async fn input(usb: bool) {
                     unsafe { cits_platform_enroll() };
                     let status = ENROLL_DONE.wait().await;
                     let n = wire::encode_enrollment(&mut out, status).unwrap();
-                    emit(&out[..n], true, true);
+                    let _ = emit(&out[..n], true, true);
                 }
                 Request::Ignore => {}
             }
@@ -279,7 +352,91 @@ async fn input(usb: bool) {
         if usb {
             unsafe { cits_platform_input_consumed() };
         }
-        embassy_futures::yield_now().await;
+        burst += 1;
+        if burst == INPUT_BURST_BEFORE_YIELD {
+            burst = 0;
+            embassy_futures::yield_now().await;
+        }
+    }
+}
+
+fn rate_per_second(current: u32, previous: u32, sample_ms: u32) -> u32 {
+    let delta = current.wrapping_sub(previous) as u64;
+    ((delta * 1000) / u64::from(sample_ms.max(1))).min(u64::from(u32::MAX)) as u32
+}
+
+#[embassy_executor::task]
+async fn statistics() {
+    let mut out = [0; 128];
+    let mut previous = PlatformStats::default();
+    let mut previous_wifi = 0u32;
+    let mut previous_capture = 0u32;
+    loop {
+        STATS_TICK.wait().await;
+        let mut platform = PlatformStats::default();
+        unsafe { cits_platform_stats(&mut platform) };
+        let wifi = CITS_WIFI_RX_PACKETS.load(Ordering::Relaxed);
+        let capture = CITS_CAPTURE_PACKETS.load(Ordering::Relaxed);
+        let sample_ms = platform.uptime_ms.wrapping_sub(previous.uptime_ms).max(1);
+        let stats = wire::Statistics {
+            uptime_ms: platform.uptime_ms,
+            sample_ms,
+            wifi_rx_pps: rate_per_second(wifi, previous_wifi, sample_ms),
+            capture_pps: rate_per_second(capture, previous_capture, sample_ms),
+            usb_capture_tx_pps: rate_per_second(
+                platform.usb_capture_packets_total,
+                previous.usb_capture_packets_total,
+                sample_ms,
+            ),
+            ble_capture_tx_pps: rate_per_second(
+                platform.ble_capture_packets_total,
+                previous.ble_capture_packets_total,
+                sample_ms,
+            ),
+            usb_bytes_per_sec: rate_per_second(
+                platform.usb_bytes_total,
+                previous.usb_bytes_total,
+                sample_ms,
+            ),
+            ble_bytes_per_sec: rate_per_second(
+                platform.ble_bytes_total,
+                previous.ble_bytes_total,
+                sample_ms,
+            ),
+            ble_notifications_per_sec: rate_per_second(
+                platform.ble_notifications_total,
+                previous.ble_notifications_total,
+                sample_ms,
+            ),
+            rx_no_buffer_total: CITS_RX_NO_BUFFER.load(Ordering::Relaxed),
+            rx_too_large_total: CITS_RX_TOO_LARGE.load(Ordering::Relaxed),
+            ble_input_drops_total: CITS_BLE_INPUT_DROPS.load(Ordering::Relaxed),
+            usb_output_drops_total: CITS_USB_CAPTURE_DROPS.load(Ordering::Relaxed),
+            ble_output_drops_total: CITS_BLE_CAPTURE_DROPS.load(Ordering::Relaxed),
+            usb_partial_write_drops_total: platform.usb_partial_drops_total,
+            ble_notify_failures_total: platform.ble_notify_failures_total,
+            wifi_rx_packets_total: wifi,
+            capture_packets_total: capture,
+            usb_capture_packets_total: platform.usb_capture_packets_total,
+            ble_capture_packets_total: platform.ble_capture_packets_total,
+            flags: platform.flags,
+            usb_queue_depth: platform.usb_queue_depth.min(u16::MAX as u32) as u16,
+            usb_queue_capacity: platform.usb_queue_capacity.min(u16::MAX as u32) as u16,
+            ble_queue_depth: platform.ble_queue_depth.min(u16::MAX as u32) as u16,
+            ble_queue_capacity: platform.ble_queue_capacity.min(u16::MAX as u32) as u16,
+            ble_mtu: platform.ble_mtu.min(u16::MAX as u32) as u16,
+            ble_conn_interval: platform.ble_conn_interval.min(u16::MAX as u32) as u16,
+            ble_conn_latency: platform.ble_conn_latency.min(u16::MAX as u32) as u16,
+            ble_supervision_timeout: platform.ble_supervision_timeout.min(u16::MAX as u32) as u16,
+            ble_tx_phy: platform.ble_tx_phy.min(u8::MAX as u32) as u8,
+            ble_rx_phy: platform.ble_rx_phy.min(u8::MAX as u32) as u8,
+        };
+        previous = platform;
+        previous_wifi = wifi;
+        previous_capture = capture;
+        if let Ok(n) = wire::encode_statistics(&mut out, stats) {
+            let _ = emit(&out[..n], true, false);
+        }
     }
 }
 
@@ -297,7 +454,6 @@ async fn transmit() {
             unsafe { cits_platform_led() }
         };
         drop(tx);
-        embassy_futures::yield_now().await;
     }
 }
 
@@ -309,6 +465,7 @@ extern "C" fn cits_rs_run() -> ! {
     spawner.spawn(captures()).unwrap();
     spawner.spawn(input(true)).unwrap();
     spawner.spawn(input(false)).unwrap();
+    spawner.spawn(statistics()).unwrap();
     spawner.spawn(transmit()).unwrap();
     assert_eq!(
         unsafe { cits_platform_start() },
@@ -333,7 +490,10 @@ pub extern "C" fn cits_rs_task_storage_bytes() -> usize {
     fn storage<F: core::future::Future + 'static>(_: F) -> usize {
         (core::mem::size_of::<embassy_executor::raw::TaskStorage<F>>() + 63) & !63
     }
-    storage(__captures_task()) + 2 * storage(__input_task(true)) + storage(__transmit_task())
+    storage(__captures_task())
+        + 2 * storage(__input_task(true))
+        + storage(__statistics_task())
+        + storage(__transmit_task())
 }
 
 #[cfg(test)]

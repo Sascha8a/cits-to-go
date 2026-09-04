@@ -36,9 +36,11 @@ import org.opentrafficmap.citstogo.intersection.IntersectionStateStore
 import org.opentrafficmap.citstogo.intersection.SsemDecoder
 import org.opentrafficmap.citstogo.intersection.SsemResponseStatus
 import org.opentrafficmap.citstogo.intersection.SsemStatus
+import org.opentrafficmap.citstogo.protocol.CaptureSequenceTracker
 import org.opentrafficmap.citstogo.protocol.CitsPacket
 import org.opentrafficmap.citstogo.protocol.CtgFrameEncoder
 import org.opentrafficmap.citstogo.protocol.CtgInboundFrame
+import org.opentrafficmap.citstogo.protocol.FirmwareStatistics
 import org.opentrafficmap.citstogo.protocol.Ieee80211Mac
 import org.opentrafficmap.citstogo.protocol.SerialPacketReader
 import org.opentrafficmap.citstogo.srem.SremPosition
@@ -109,6 +111,8 @@ class CitsBridgeService : Service() {
     private var replayPackets = 0L
     private var discoveredDevices = 0L
     private var truncated = 0L
+    private var transportDropped = 0L
+    private val captureSequenceTracker = CaptureSequenceTracker()
     private var protocolErrors = 0L
     private var txRequested = 0L
     private var txSuccessful = 0L
@@ -345,7 +349,7 @@ class CitsBridgeService : Service() {
             serial = opened
             promoteConnectedDeviceForeground()
             status = status.copy(running = true, usbState = "Connected: ${opened.description()}")
-            val reader = SerialPacketReader(::handlePacket, ::handleTxResult, ::handleProtocolError)
+            val reader = SerialPacketReader(::handlePacket, ::handleTxResult, ::handleProtocolError, ::handleFirmwareStatistics)
             serialReadThread = Thread({
                 val buffer = ByteArray(16 * 1024)
                 while (connectionWanted && connectionMode == ConnectionMode.USB && serial === opened) {
@@ -396,7 +400,7 @@ class CitsBridgeService : Service() {
                 serial = opened
                 promoteConnectedDeviceForeground()
                 status = status.copy(running = true, usbState = "Connected: ${opened.description()}", lastError = "")
-                val reader = SerialPacketReader(::handlePacket, ::handleTxResult, ::handleProtocolError)
+                val reader = SerialPacketReader(::handlePacket, ::handleTxResult, ::handleProtocolError, ::handleFirmwareStatistics)
                 serialReadThread = Thread({
                     val buffer = ByteArray(16 * 1024)
                     while (connectionWanted && connectionMode == ConnectionMode.BLUETOOTH && serial === opened) {
@@ -438,6 +442,8 @@ class CitsBridgeService : Service() {
     private fun closeSerial(message: String?) {
         val old = serial
         serial = null
+        captureSequenceTracker.reset()
+        status = status.copy(firmwareStatistics = null, bleDebugParameters = null)
         serialReadThread?.interrupt()
         serialWriteThread?.interrupt()
         runCatching { old?.close() }
@@ -463,8 +469,17 @@ class CitsBridgeService : Service() {
         }
     }
 
+    private fun handleFirmwareStatistics(statistics: FirmwareStatistics) {
+        status = status.copy(
+            firmwareStatistics = statistics,
+            bleDebugParameters = (serial as? BleGattSerial)?.debugParameters(),
+        )
+        publishStatus(null)
+    }
+
     private fun handlePacket(packet: CitsPacket, publishToMqtt: Boolean = true) {
         packets += 1
+        if (serial != null) transportDropped += captureSequenceTracker.observe(packet.sequence)
         if (packet.truncated) truncated += 1
         val discoveredMacAddress = Ieee80211Mac.sourceAddress(packet.payload)
         if (discoveredMacAddress != null && discoveredMacAddresses.add(discoveredMacAddress)) {
@@ -481,6 +496,7 @@ class CitsBridgeService : Service() {
             running = true,
             packets = packets,
             truncated = truncated,
+            transportDropped = transportDropped,
             mqttPublished = mqttPublished,
             pcapRecording = pcapWriter != null,
             pcapPackets = pcapPackets,
@@ -1198,12 +1214,14 @@ class CitsBridgeService : Service() {
             replayPackets = replayPackets,
             discoveredDevices = discoveredDevices,
             truncated = truncated,
+            transportDropped = transportDropped,
             protocolErrors = protocolErrors,
             txRequested = txRequested,
             txSuccessful = txSuccessful,
             txFailed = txFailed,
             camEnabled = camEnabled,
             camSent = camSent,
+            bleDebugParameters = (serial as? BleGattSerial)?.debugParameters(),
             mqttState = when {
                 !mqttEnabled -> "Disabled"
                 mqttClient.isConnected() -> "Connected"
@@ -1226,12 +1244,15 @@ class CitsBridgeService : Service() {
         intent.putExtra(EXTRA_REPLAY_PACKETS, status.replayPackets)
         intent.putExtra(EXTRA_DISCOVERED_DEVICES, status.discoveredDevices)
         intent.putExtra(EXTRA_TRUNCATED, status.truncated)
+        intent.putExtra(EXTRA_TRANSPORT_DROPPED, status.transportDropped)
         intent.putExtra(EXTRA_PROTOCOL_ERRORS, status.protocolErrors)
         intent.putExtra(EXTRA_TX_REQUESTED, status.txRequested)
         intent.putExtra(EXTRA_TX_SUCCESSFUL, status.txSuccessful)
         intent.putExtra(EXTRA_TX_FAILED, status.txFailed)
         intent.putExtra(EXTRA_CAM_ENABLED, status.camEnabled)
         intent.putExtra(EXTRA_CAM_SENT, status.camSent)
+        status.firmwareStatistics?.let { intent.putExtra(EXTRA_FIRMWARE_STATISTICS, it) }
+        status.bleDebugParameters?.let { intent.putExtra(EXTRA_BLE_DEBUG_PARAMETERS, it) }
         intent.putExtra(EXTRA_SREM_STATE, status.lastSremState)
         intent.putExtra(EXTRA_SREM_SUMMARY, status.lastSremSummary)
         intent.putExtra(EXTRA_SREM_REQUEST_ID, status.lastSremRequestId)
@@ -1499,6 +1520,9 @@ class CitsBridgeService : Service() {
         const val EXTRA_REPLAY_PACKETS = "replayPackets"
         const val EXTRA_DISCOVERED_DEVICES = "discoveredDevices"
         const val EXTRA_TRUNCATED = "truncated"
+        const val EXTRA_TRANSPORT_DROPPED = "transportDropped"
+        const val EXTRA_FIRMWARE_STATISTICS = "firmwareStatistics"
+        const val EXTRA_BLE_DEBUG_PARAMETERS = "bleDebugParameters"
         const val EXTRA_PROTOCOL_ERRORS = "protocolErrors"
         const val EXTRA_LAST_PACKET = "lastPacket"
         const val EXTRA_LAST_ERROR = "lastError"

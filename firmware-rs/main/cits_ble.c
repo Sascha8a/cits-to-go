@@ -34,12 +34,15 @@
     (CITS_BLE_FRAME_HEADER_LEN + CONFIG_CITS_MAX_PACKET_BYTES + CITS_BLE_FRAME_TRAILER_LEN)
 #define CITS_BLE_MAX_WRITE_LEN \
     (CITS_BLE_MAX_DECODED_LEN + CITS_BLE_COBS_OVERHEAD(CITS_BLE_MAX_DECODED_LEN) + 1u)
-#define CITS_BLE_TX_QUEUE_DEPTH CONFIG_CITS_PACKET_POOL_SIZE
+#define CITS_BLE_TX_QUEUE_DEPTH CONFIG_CITS_BLE_OUTPUT_SLOTS
+#define CITS_BLE_CONTROL_RESERVE 2u
+#define CITS_BLE_NOTIFY_MAX 512u
 
 typedef struct {
     uint16_t conn_handle;
     uint32_t epoch;
     uint16_t len;
+    bool control;
     uint8_t data[CITS_BLE_MAX_WRITE_LEN + 1];
 } ble_tx_slot_t;
 
@@ -65,7 +68,8 @@ static const ble_uuid128_t tx_uuid = BLE_UUID128_INIT(
 
 static cits_ble_rx_callback_t rx_callback;
 static QueueHandle_t tx_free_queue;
-static QueueHandle_t tx_queue;
+static QueueHandle_t tx_capture_queue;
+static QueueHandle_t tx_control_queue;
 static TaskHandle_t tx_task_handle;
 static ble_tx_slot_t tx_slots[CITS_BLE_TX_QUEUE_DEPTH];
 static uint16_t tx_value_handle;
@@ -81,8 +85,44 @@ static void advertise(void);
 static void enroll_on_host(struct ble_npl_event *event);
 static struct ble_npl_event enroll_event;
 static _Atomic uint32_t connection_epoch;
+static _Atomic uint32_t tx_bytes_total;
+static _Atomic uint32_t tx_notifications_total;
+static _Atomic uint32_t tx_notify_failures_total;
+static _Atomic uint32_t tx_capture_packets_total;
+static _Atomic uint32_t current_mtu = 23;
+static _Atomic uint32_t current_conn_interval;
+static _Atomic uint32_t current_conn_latency;
+static _Atomic uint32_t current_supervision_timeout;
+static _Atomic uint32_t current_tx_phy;
+static _Atomic uint32_t current_rx_phy;
 void cits_rs_enroll_done(int32_t status);
 void cits_platform_ble_disconnected(void);
+
+static void refresh_link_stats(uint16_t handle)
+{
+    struct ble_gap_conn_desc desc;
+    if (handle == CITS_BLE_INVALID_CONN_HANDLE) return;
+    if (ble_gap_conn_find(handle, &desc) == 0) {
+        atomic_store(&current_conn_interval, desc.conn_itvl);
+        atomic_store(&current_conn_latency, desc.conn_latency);
+        atomic_store(&current_supervision_timeout, desc.supervision_timeout);
+    }
+    /* Do not issue HCI LE Read PHY from GAP callbacks just for diagnostics.
+     * On the ESP32-C5 this adds control traffic while Wi-Fi and a high-rate
+     * notification stream are active and can contribute to supervision
+     * timeouts. Android already reports the negotiated PHY. Keep the
+     * firmware-side PHY fields at 0 (unknown) until we have a passive source. */
+}
+
+static void clear_link_stats(void)
+{
+    atomic_store(&current_mtu, 23);
+    atomic_store(&current_conn_interval, 0);
+    atomic_store(&current_conn_latency, 0);
+    atomic_store(&current_supervision_timeout, 0);
+    atomic_store(&current_tx_phy, 0);
+    atomic_store(&current_rx_phy, 0);
+}
 
 static void request_fast_connection(uint16_t handle)
 {
@@ -192,6 +232,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             (void)ble_gap_terminate(event->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
             return 0;
         }
+        refresh_link_stats(event->connect.conn_handle);
 
         if (peer_is_bonded(&desc.peer_id_addr)) {
             /* Re-enrolling the existing owner is harmless and consumes the
@@ -243,6 +284,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             return 0;
         }
         link_secured = true;
+        refresh_link_stats(event->enc_change.conn_handle);
         request_fast_connection(event->enc_change.conn_handle);
         if (enrollment_conn_handle == event->enc_change.conn_handle) {
             /* NimBLE can retain two bonds temporarily. Commit replacement only
@@ -250,6 +292,18 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             delete_other_bonds(&desc.peer_id_addr);
         }
         enrollment_conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
+        return 0;
+
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        if (event->conn_update.status == 0) refresh_link_stats(event->conn_update.conn_handle);
+        return 0;
+
+    case BLE_GAP_EVENT_MTU:
+        if (event->mtu.conn_handle == conn_handle) atomic_store(&current_mtu, event->mtu.value);
+        return 0;
+
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        /* No active PHY query here; see refresh_link_stats(). */
         return 0;
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
@@ -272,6 +326,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         notify_enabled = false;
         link_secured = false;
         enrollment_conn_handle = CITS_BLE_INVALID_CONN_HANDLE;
+        clear_link_stats();
         if (tx_task_handle != NULL) xTaskNotifyGive(tx_task_handle);
         advertise();
         return 0;
@@ -331,48 +386,134 @@ static void host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
+static bool take_next_tx_slot(uint8_t *slot_index)
+{
+    if (xQueueReceive(tx_control_queue, slot_index, 0) == pdTRUE) return true;
+    return xQueueReceive(tx_capture_queue, slot_index, 0) == pdTRUE;
+}
+
+static void release_tx_slot(uint8_t slot_index)
+{
+    (void)xQueueSend(tx_free_queue, &slot_index, portMAX_DELAY);
+}
+
+static bool slot_matches_link(const ble_tx_slot_t *slot)
+{
+    return conn_handle == slot->conn_handle && notify_enabled && link_secured &&
+           slot->epoch == atomic_load(&connection_epoch);
+}
+
 static void tx_task(void *param)
 {
     (void)param;
-    uint8_t slot_index;
+    uint8_t slot_index = 0;
+    size_t slot_offset = 0;
+    bool have_slot = false;
+    uint8_t notify[CITS_BLE_NOTIFY_MAX];
 
     for (;;) {
-        if (xQueueReceive(tx_queue, &slot_index, portMAX_DELAY) != pdTRUE) continue;
-
-        ble_tx_slot_t *slot = &tx_slots[slot_index];
-        size_t offset = 0;
-        int64_t last_progress = esp_timer_get_time();
-        while (offset < slot->len && conn_handle == slot->conn_handle &&
-               notify_enabled && link_secured && slot->epoch == atomic_load(&connection_epoch)) {
-            const uint16_t mtu = ble_att_mtu(slot->conn_handle);
-            size_t chunk_max = mtu > 3 ? (size_t)(mtu - 3) : 20u;
-            if (chunk_max > 512u) chunk_max = 512u;
-            const size_t remaining = slot->len - offset;
-            const size_t chunk_len = remaining < chunk_max ? remaining : chunk_max;
-            struct os_mbuf *om = ble_hs_mbuf_from_flat(slot->data + offset, chunk_len);
-            const int rc = om == NULL ? BLE_HS_ENOMEM :
-                ble_gatts_notify_custom(slot->conn_handle, tx_value_handle, om);
-
-            if (rc == BLE_HS_ENOMEM) {
-                /* A notify completion wakes us as soon as NimBLE frees buffers. */
-                if (esp_timer_get_time() - last_progress >= 1000000) {
-                    (void)ble_gap_terminate(slot->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-                    break;
-                }
-                (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
+        if (!have_slot) {
+            if (!take_next_tx_slot(&slot_index)) {
+                (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                 continue;
             }
-            if (rc != 0) {
-                // A partial COBS frame cannot be resumed safely. Force a fresh
-                // stream rather than concatenate its tail with the next record.
-                (void)ble_gap_terminate(slot->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-                break;
-            }
-            offset += chunk_len;
-            last_progress = esp_timer_get_time();
+            slot_offset = 0;
+            have_slot = true;
         }
 
-        (void)xQueueSend(tx_free_queue, &slot_index, portMAX_DELAY);
+        ble_tx_slot_t *slot = &tx_slots[slot_index];
+        if (!slot_matches_link(slot)) {
+            release_tx_slot(slot_index);
+            have_slot = false;
+            continue;
+        }
+
+        const uint16_t mtu = ble_att_mtu(slot->conn_handle);
+        size_t chunk_max = mtu > 3 ? (size_t)(mtu - 3) : 20u;
+        if (chunk_max > sizeof(notify)) chunk_max = sizeof(notify);
+
+        size_t notify_len = 0;
+        uint32_t completed_capture_records = 0;
+        uint16_t notify_handle = slot->conn_handle;
+        uint32_t notify_epoch = slot->epoch;
+
+        /* CTG1 is a byte stream, so one ATT notification may contain several
+         * complete frames (and may split a large frame). Filling the MTU this
+         * way substantially reduces GATT/Android callback overhead for the
+         * common case of small CAM/SPATEM packets. */
+        while (notify_len < chunk_max && have_slot) {
+            slot = &tx_slots[slot_index];
+            if (slot->conn_handle != notify_handle || slot->epoch != notify_epoch ||
+                !slot_matches_link(slot)) {
+                release_tx_slot(slot_index);
+                have_slot = false;
+                break;
+            }
+
+            const size_t remaining = slot->len - slot_offset;
+            const size_t available = chunk_max - notify_len;
+            const size_t copy_len = remaining < available ? remaining : available;
+            memcpy(notify + notify_len, slot->data + slot_offset, copy_len);
+            notify_len += copy_len;
+            slot_offset += copy_len;
+
+            if (slot_offset == slot->len) {
+                if (!slot->control) completed_capture_records++;
+                release_tx_slot(slot_index);
+                have_slot = false;
+                slot_offset = 0;
+                if (notify_len < chunk_max && take_next_tx_slot(&slot_index)) {
+                    have_slot = true;
+                }
+            }
+        }
+
+        if (notify_len == 0) continue;
+
+        bool sent = false;
+        const int64_t retry_started = esp_timer_get_time();
+        for (;;) {
+            if (conn_handle != notify_handle || !notify_enabled || !link_secured ||
+                notify_epoch != atomic_load(&connection_epoch)) break;
+
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(notify, notify_len);
+            const int rc = om == NULL ? BLE_HS_ENOMEM :
+                ble_gatts_notify_custom(notify_handle, tx_value_handle, om);
+            if (rc == 0) {
+                atomic_fetch_add(&tx_notifications_total, 1);
+                atomic_fetch_add(&tx_bytes_total, (uint32_t)notify_len);
+                if (completed_capture_records != 0) {
+                    atomic_fetch_add(&tx_capture_packets_total, completed_capture_records);
+                }
+                sent = true;
+                break;
+            }
+            if (rc != BLE_HS_ENOMEM) {
+                (void)ble_gap_terminate(notify_handle, BLE_ERR_REM_USER_CONN_TERM);
+                break;
+            }
+
+            /* A completion notification normally wakes us immediately when
+             * NimBLE frees mbufs. New output also wakes this task, so retrying
+             * is event-driven rather than polling. */
+            if (esp_timer_get_time() - retry_started >= 1000000) {
+                (void)ble_gap_terminate(notify_handle, BLE_ERR_REM_USER_CONN_TERM);
+                break;
+            }
+            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
+        }
+
+        if (!sent) atomic_fetch_add(&tx_notify_failures_total, 1);
+
+        /* If a failed notification contained the first bytes of a large frame,
+         * discard that remainder. Continuing it would create a syntactically
+         * valid but corrupt stream if the link stays up long enough to dequeue
+         * more data before termination completes. */
+        if (!sent && have_slot && slot_offset != 0) {
+            release_tx_slot(slot_index);
+            have_slot = false;
+            slot_offset = 0;
+        }
     }
 }
 
@@ -380,8 +521,11 @@ esp_err_t cits_ble_init(cits_ble_rx_callback_t callback)
 {
     rx_callback = callback;
     tx_free_queue = xQueueCreate(CITS_BLE_TX_QUEUE_DEPTH, sizeof(uint8_t));
-    tx_queue = xQueueCreate(CITS_BLE_TX_QUEUE_DEPTH, sizeof(uint8_t));
-    if (tx_free_queue == NULL || tx_queue == NULL) return ESP_ERR_NO_MEM;
+    tx_capture_queue = xQueueCreate(CITS_BLE_TX_QUEUE_DEPTH, sizeof(uint8_t));
+    tx_control_queue = xQueueCreate(CITS_BLE_TX_QUEUE_DEPTH, sizeof(uint8_t));
+    if (tx_free_queue == NULL || tx_capture_queue == NULL || tx_control_queue == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
     for (uint8_t i = 0; i < CITS_BLE_TX_QUEUE_DEPTH; ++i) {
         if (xQueueSend(tx_free_queue, &i, 0) != pdTRUE) return ESP_FAIL;
     }
@@ -445,20 +589,49 @@ bool cits_ble_write(const uint8_t *data, size_t len, bool control)
         handle == CITS_BLE_INVALID_CONN_HANDLE || !notify_enabled || !link_secured) return true;
 
     uint8_t slot_index;
-    if ((!control && uxQueueMessagesWaiting(tx_free_queue) <= 2) ||
+    if ((!control && uxQueueMessagesWaiting(tx_free_queue) <= CITS_BLE_CONTROL_RESERVE) ||
         xQueueReceive(tx_free_queue, &slot_index, 0) != pdTRUE) return false;
 
     ble_tx_slot_t *slot = &tx_slots[slot_index];
     slot->conn_handle = handle;
     slot->epoch = epoch;
+    slot->control = control;
     // An empty record before every frame also repairs a subscribe-off/on
     // transition that abandoned a partly emitted record on this connection.
     slot->len = (uint16_t)(len + 1);
     slot->data[0] = 0;
     memcpy(slot->data + 1, data, len);
-    if (xQueueSend(tx_queue, &slot_index, 0) != pdTRUE) {
+    QueueHandle_t queue = control ? tx_control_queue : tx_capture_queue;
+    if (xQueueSend(queue, &slot_index, 0) != pdTRUE) {
         (void)xQueueSend(tx_free_queue, &slot_index, 0);
         return false;
     }
+    if (tx_task_handle != NULL) xTaskNotifyGive(tx_task_handle);
     return true;
+}
+
+void cits_ble_get_stats(cits_ble_stats_t *out)
+{
+    if (out == NULL) return;
+    memset(out, 0, sizeof(*out));
+    out->bytes_total = atomic_load(&tx_bytes_total);
+    out->notifications_total = atomic_load(&tx_notifications_total);
+    out->notify_failures_total = atomic_load(&tx_notify_failures_total);
+    out->capture_packets_total = atomic_load(&tx_capture_packets_total);
+    out->queue_capacity = CITS_BLE_TX_QUEUE_DEPTH;
+    if (tx_free_queue != NULL) {
+        const UBaseType_t free_slots = uxQueueMessagesWaiting(tx_free_queue);
+        out->queue_depth = free_slots <= CITS_BLE_TX_QUEUE_DEPTH
+            ? CITS_BLE_TX_QUEUE_DEPTH - (uint32_t)free_slots : 0;
+    }
+    const uint16_t handle = conn_handle;
+    if (handle != CITS_BLE_INVALID_CONN_HANDLE) out->flags |= CITS_BLE_STATS_CONNECTED;
+    if (notify_enabled) out->flags |= CITS_BLE_STATS_NOTIFY_ENABLED;
+    if (link_secured) out->flags |= CITS_BLE_STATS_SECURED;
+    out->mtu = atomic_load(&current_mtu);
+    out->conn_interval = atomic_load(&current_conn_interval);
+    out->conn_latency = atomic_load(&current_conn_latency);
+    out->supervision_timeout = atomic_load(&current_supervision_timeout);
+    out->tx_phy = atomic_load(&current_tx_phy);
+    out->rx_phy = atomic_load(&current_rx_phy);
 }

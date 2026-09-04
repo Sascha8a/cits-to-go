@@ -5,6 +5,7 @@
 #include "cits_ble.h"
 #include "tx_custom.h"
 #include <string.h>
+#include <stdatomic.h>
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
 #include "esp_check.h"
@@ -35,12 +36,17 @@
 #define ENCODED_MAX (DECODED_MAX + DECODED_MAX / 254 + 2)
 #define USB_SLOTS 4
 #define CONTROL_RESERVE 2
+#define CITS_EMIT_USB_DROPPED 0x01u
+#define CITS_EMIT_BLE_DROPPED 0x02u
 static TaskHandle_t executor_task, usb_reader_task, usb_writer_task;
 static QueueHandle_t usb_free, usb_capture, usb_control, radio_queue;
-static esp_timer_handle_t led_timer;
+static esp_timer_handle_t led_timer, stats_timer;
+static _Atomic bool led_active;
 static bool ble_discard;
-static volatile uint32_t usb_partial_drops;
-typedef struct { size_t len; uint8_t bytes[ENCODED_MAX]; } usb_slot_t;
+static _Atomic uint32_t usb_partial_drops;
+static _Atomic uint32_t usb_bytes_total;
+static _Atomic uint32_t usb_capture_packets_total;
+typedef struct { size_t len; bool control; uint8_t bytes[ENCODED_MAX]; } usb_slot_t;
 static usb_slot_t usb_slots[USB_SLOTS];
 typedef struct { const uint8_t *bytes; size_t len; bool seq; } radio_job_t;
 
@@ -58,12 +64,23 @@ void cits_platform_input_consumed(void) { xTaskNotifyGive(usb_reader_task); }
 static void led_off(void *arg) {
     (void)arg;
     gpio_set_level(CONFIG_CITS_LED_GPIO, CONFIG_CITS_LED_ACTIVE_LOW ? 1 : 0);
+    atomic_store_explicit(&led_active, false, memory_order_release);
 }
 void cits_platform_led(void) {
+    /* At high packet rates, restarting an esp_timer for every frame adds
+     * avoidable timer-queue traffic. One pulse already indicates activity;
+     * ignore additional packets until that pulse expires. */
+    if (atomic_exchange_explicit(&led_active, true, memory_order_acq_rel)) return;
     gpio_set_level(CONFIG_CITS_LED_GPIO, CONFIG_CITS_LED_ACTIVE_LOW ? 0 : 1);
     int64_t timeout = CONFIG_CITS_LED_PULSE_MS * 1000LL;
-    if (esp_timer_restart(led_timer, timeout) == ESP_ERR_INVALID_STATE)
-        (void)esp_timer_start_once(led_timer, timeout);
+    if (esp_timer_start_once(led_timer, timeout) != ESP_OK) {
+        atomic_store_explicit(&led_active, false, memory_order_release);
+    }
+}
+
+static void statistics_tick(void *arg) {
+    (void)arg;
+    cits_rs_statistics_tick();
 }
 
 static void usb_read_task(void *arg) {
@@ -106,7 +123,10 @@ static void usb_write_task(void *arg) {
             bool ready = !needs_delimiter || write_all(&zero, 1);
             bool ok = ready && write_all(usb_slots[slot].bytes, usb_slots[slot].len);
             needs_delimiter = !ok;
-            if (!ok) ++usb_partial_drops;
+            if (ok) {
+                atomic_fetch_add(&usb_bytes_total, (uint32_t)usb_slots[slot].len);
+                if (!usb_slots[slot].control) atomic_fetch_add(&usb_capture_packets_total, 1);
+            } else atomic_fetch_add(&usb_partial_drops, 1);
         } else needs_delimiter = true;
         (void)xQueueSend(usb_free, &slot, 0);
     }
@@ -114,23 +134,60 @@ static void usb_write_task(void *arg) {
 
 uint32_t cits_platform_emit(const uint8_t *data, size_t len, bool control, bool usb_only) {
     uint32_t dropped = 0;
-    if (len > ENCODED_MAX) return 1;
+    if (len > ENCODED_MAX) return CITS_EMIT_USB_DROPPED | (usb_only ? 0u : CITS_EMIT_BLE_DROPPED);
     if (usb_serial_jtag_is_connected()) {
         uint8_t slot;
         /* Capture cannot consume the last two control-response buffers. Only
          * the single Embassy executor produces, so this capacity check is safe. */
         if ((!control && uxQueueMessagesWaiting(usb_free) <= CONTROL_RESERVE) ||
-            xQueueReceive(usb_free, &slot, 0) != pdTRUE) ++dropped;
+            xQueueReceive(usb_free, &slot, 0) != pdTRUE) dropped |= CITS_EMIT_USB_DROPPED;
         else {
             usb_slots[slot].len = len;
+            usb_slots[slot].control = control;
             memcpy(usb_slots[slot].bytes, data, len);
             if (xQueueSend(control ? usb_control : usb_capture, &slot, 0) != pdTRUE) {
-                (void)xQueueSend(usb_free, &slot, 0); ++dropped;
-            } else xTaskNotifyGive(usb_writer_task);
+                (void)xQueueSend(usb_free, &slot, 0);
+                dropped |= CITS_EMIT_USB_DROPPED;
+            } else {
+                xTaskNotifyGive(usb_writer_task);
+            }
         }
     }
-    if (!usb_only && !cits_ble_write(data, len, control)) ++dropped;
+    if (!usb_only && !cits_ble_write(data, len, control)) dropped |= CITS_EMIT_BLE_DROPPED;
     return dropped;
+}
+
+void cits_platform_stats(cits_platform_stats_t *out) {
+    if (out == NULL) return;
+    memset(out, 0, sizeof(*out));
+    out->uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    out->usb_bytes_total = atomic_load(&usb_bytes_total);
+    out->usb_partial_drops_total = atomic_load(&usb_partial_drops);
+    out->usb_capture_packets_total = atomic_load(&usb_capture_packets_total);
+    out->usb_queue_capacity = USB_SLOTS;
+    if (usb_free != NULL) {
+        const UBaseType_t free_slots = uxQueueMessagesWaiting(usb_free);
+        out->usb_queue_depth = free_slots <= USB_SLOTS ? USB_SLOTS - (uint32_t)free_slots : 0;
+    }
+    if (usb_serial_jtag_is_connected()) out->flags |= 1u << 0;
+
+    cits_ble_stats_t ble = {0};
+    cits_ble_get_stats(&ble);
+    out->ble_bytes_total = ble.bytes_total;
+    out->ble_notifications_total = ble.notifications_total;
+    out->ble_notify_failures_total = ble.notify_failures_total;
+    out->ble_capture_packets_total = ble.capture_packets_total;
+    out->ble_queue_depth = ble.queue_depth;
+    out->ble_queue_capacity = ble.queue_capacity;
+    out->ble_mtu = ble.mtu;
+    out->ble_conn_interval = ble.conn_interval;
+    out->ble_conn_latency = ble.conn_latency;
+    out->ble_supervision_timeout = ble.supervision_timeout;
+    out->ble_tx_phy = ble.tx_phy;
+    out->ble_rx_phy = ble.rx_phy;
+    if (ble.flags & CITS_BLE_STATS_CONNECTED) out->flags |= 1u << 1;
+    if (ble.flags & CITS_BLE_STATS_NOTIFY_ENABLED) out->flags |= 1u << 2;
+    if (ble.flags & CITS_BLE_STATS_SECURED) out->flags |= 1u << 3;
 }
 
 static void radio_worker(void *arg) {
@@ -209,6 +266,8 @@ int32_t cits_platform_start(void) {
     led_off(NULL);
     const esp_timer_create_args_t timer = { .callback = led_off, .name = "cits-led" };
     ESP_RETURN_ON_ERROR(esp_timer_create(&timer, &led_timer), TAG, "timer");
+    const esp_timer_create_args_t stats = { .callback = statistics_tick, .name = "cits-stats" };
+    ESP_RETURN_ON_ERROR(esp_timer_create(&stats, &stats_timer), TAG, "stats timer");
     usb_free = xQueueCreate(USB_SLOTS, sizeof(uint8_t));
     usb_capture = xQueueCreate(USB_SLOTS, sizeof(uint8_t));
     usb_control = xQueueCreate(USB_SLOTS, sizeof(uint8_t));
@@ -219,6 +278,7 @@ int32_t cits_platform_start(void) {
         xTaskCreate(usb_write_task, "usb-tx", 3072, NULL, 3, &usb_writer_task) != pdPASS ||
         xTaskCreate(radio_worker, "radio-tx", 4096, NULL, 4, NULL) != pdPASS) return ESP_ERR_NO_MEM;
     ESP_RETURN_ON_ERROR(cits_ble_init(ble_rx), TAG, "BLE");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(stats_timer, 1000000), TAG, "stats start");
     return wifi_start();
 }
 void app_main(void) {

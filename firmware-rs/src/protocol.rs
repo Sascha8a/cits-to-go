@@ -252,6 +252,50 @@ pub struct CaptureMeta {
     pub wifi_type: u8,
     pub rx_state: u8,
 }
+
+pub const STATISTICS_HEADER_LEN: u16 = 112;
+pub const STATS_USB_CONNECTED: u32 = 1 << 0;
+pub const STATS_BLE_CONNECTED: u32 = 1 << 1;
+pub const STATS_BLE_NOTIFY_ENABLED: u32 = 1 << 2;
+pub const STATS_BLE_SECURED: u32 = 1 << 3;
+
+/// One-second firmware health snapshot. Rates are normalized to packets/bytes
+/// per second even if timer delivery is slightly late. Totals are wrapping u32
+/// counters and are intended for diagnostics rather than billing/accounting.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct Statistics {
+    pub uptime_ms: u32,
+    pub sample_ms: u32,
+    pub wifi_rx_pps: u32,
+    pub capture_pps: u32,
+    pub usb_capture_tx_pps: u32,
+    pub ble_capture_tx_pps: u32,
+    pub usb_bytes_per_sec: u32,
+    pub ble_bytes_per_sec: u32,
+    pub ble_notifications_per_sec: u32,
+    pub rx_no_buffer_total: u32,
+    pub rx_too_large_total: u32,
+    pub ble_input_drops_total: u32,
+    pub usb_output_drops_total: u32,
+    pub ble_output_drops_total: u32,
+    pub usb_partial_write_drops_total: u32,
+    pub ble_notify_failures_total: u32,
+    pub wifi_rx_packets_total: u32,
+    pub capture_packets_total: u32,
+    pub usb_capture_packets_total: u32,
+    pub ble_capture_packets_total: u32,
+    pub flags: u32,
+    pub usb_queue_depth: u16,
+    pub usb_queue_capacity: u16,
+    pub ble_queue_depth: u16,
+    pub ble_queue_capacity: u16,
+    pub ble_mtu: u16,
+    pub ble_conn_interval: u16,
+    pub ble_conn_latency: u16,
+    pub ble_supervision_timeout: u16,
+    pub ble_tx_phy: u8,
+    pub ble_rx_phy: u8,
+}
 pub fn is_broadcast(packet: &[u8]) -> bool {
     packet.len() >= 10 && packet[4..10] == [255; 6]
 }
@@ -304,5 +348,49 @@ pub fn encode_enrollment(out: &mut [u8], status: i32) -> Result<usize, BufferToo
     e.bytes(&header(5, 16))?;
     e.bytes(&status.to_le_bytes())?;
     e.bytes(&[(status == OK) as u8, 0, 0, 0])?;
+    e.finish()
+}
+
+pub fn encode_statistics(out: &mut [u8], stats: Statistics) -> Result<usize, BufferTooSmall> {
+    let mut e = Encoder::new(out)?;
+    e.bytes(&header(6, STATISTICS_HEADER_LEN))?;
+    for value in [
+        stats.uptime_ms,
+        stats.sample_ms,
+        stats.wifi_rx_pps,
+        stats.capture_pps,
+        stats.usb_capture_tx_pps,
+        stats.ble_capture_tx_pps,
+        stats.usb_bytes_per_sec,
+        stats.ble_bytes_per_sec,
+        stats.ble_notifications_per_sec,
+        stats.rx_no_buffer_total,
+        stats.rx_too_large_total,
+        stats.ble_input_drops_total,
+        stats.usb_output_drops_total,
+        stats.ble_output_drops_total,
+        stats.usb_partial_write_drops_total,
+        stats.ble_notify_failures_total,
+        stats.wifi_rx_packets_total,
+        stats.capture_packets_total,
+        stats.usb_capture_packets_total,
+        stats.ble_capture_packets_total,
+        stats.flags,
+    ] {
+        e.bytes(&value.to_le_bytes())?;
+    }
+    for value in [
+        stats.usb_queue_depth,
+        stats.usb_queue_capacity,
+        stats.ble_queue_depth,
+        stats.ble_queue_capacity,
+        stats.ble_mtu,
+        stats.ble_conn_interval,
+        stats.ble_conn_latency,
+        stats.ble_supervision_timeout,
+    ] {
+        e.bytes(&value.to_le_bytes())?;
+    }
+    e.bytes(&[stats.ble_tx_phy, stats.ble_rx_phy, 0, 0])?;
     e.finish()
 }

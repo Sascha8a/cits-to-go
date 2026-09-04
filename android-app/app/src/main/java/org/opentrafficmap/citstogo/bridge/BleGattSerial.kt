@@ -37,15 +37,30 @@ class BleGattSerial(private val context: Context) : CtgByteTransport {
     @Volatile private var txCharacteristic: BluetoothGattCharacteristic? = null
     @Volatile private var connectedDevice: BluetoothDevice? = null
     @Volatile private var mtu = 23
+    @Volatile private var txPhy = 0
+    @Volatile private var rxPhy = 0
+    @Volatile private var highPriorityRequested = false
+    @Volatile private var preferred2MPhyRequested = false
     @Volatile private var closed = false
     @Volatile private var pendingWrite: CountDownLatch? = null
+    @Volatile private var notificationSetupStarted = false
     private var pendingRead: ByteArray? = null
     private var pendingReadOffset = 0
 
     override fun description(): String {
         val device = connectedDevice
-        return if (device == null) "CITS-to-go BLE" else "CITS-to-go BLE ${device.address}"
+        return if (device == null) "CITS-to-go BLE" else "CITS-to-go BLE ${device.address} (MTU $mtu)"
     }
+
+    fun debugParameters(): BleDebugParameters = BleDebugParameters(
+        deviceAddress = connectedDevice?.address.orEmpty(),
+        mtu = mtu,
+        txPhy = txPhy,
+        rxPhy = rxPhy,
+        highPriorityRequested = highPriorityRequested,
+        preferred2MPhyRequested = preferred2MPhyRequested,
+        queuedNotifications = incoming.size + if (pendingRead != null) 1 else 0,
+    )
 
     fun connect(timeoutMs: Long = 15_000) {
         connectTarget(null, timeoutMs)
@@ -102,7 +117,6 @@ class BleGattSerial(private val context: Context) : CtgByteTransport {
             if (rxCharacteristic == null || txCharacteristic == null || gatt == null) {
                 throw IOException("CITS-to-go Bluetooth service unavailable")
             }
-            gatt?.requestMtu(517)
         } catch (e: Exception) {
             close()
             throw e
@@ -121,12 +135,11 @@ class BleGattSerial(private val context: Context) : CtgByteTransport {
                 return
             }
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-                gatt.setPreferredPhy(
-                    BluetoothDevice.PHY_LE_2M_MASK,
-                    BluetoothDevice.PHY_LE_2M_MASK,
-                    BluetoothDevice.PHY_OPTION_NO_PREFERRED,
-                )
+                highPriorityRequested = gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                // ESP32-C5 links can stop responding immediately after switching to LE 2M.
+                // Keep the default 1M PHY; the large MTU and connection priority provide
+                // the throughput improvement without destabilizing the controller.
+                preferred2MPhyRequested = false
                 if (!gatt.discoverServices()) {
                     connectError.set("Bluetooth service discovery could not start")
                     ready.countDown()
@@ -147,41 +160,46 @@ class BleGattSerial(private val context: Context) : CtgByteTransport {
             }
             rxCharacteristic = service.getCharacteristic(RX_UUID)
             txCharacteristic = service.getCharacteristic(TX_UUID)
-            val tx = txCharacteristic
-            if (rxCharacteristic == null || tx == null || !gatt.setCharacteristicNotification(tx, true)) {
+            if (rxCharacteristic == null || txCharacteristic == null) {
                 connectError.set("CITS-to-go Bluetooth characteristics unavailable")
                 ready.countDown()
                 return
             }
-            val cccd = tx.getDescriptor(CCCD_UUID)
-            if (cccd == null) {
-                connectError.set("Bluetooth notification descriptor missing")
-                ready.countDown()
-                return
-            }
-            val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS
-            } else {
-                @Suppress("DEPRECATION")
-                run {
-                    cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(cccd)
-                }
-            }
-            if (!started) {
-                connectError.set("Could not enable Bluetooth notifications")
-                ready.countDown()
-            }
+
+            /* Do not subscribe at the default 23-byte MTU and start a burst of
+             * 20-byte notifications while the MTU request is still in flight.
+             * Negotiate first; if the request cannot be started, use the default
+             * MTU but still finish the connection normally. */
+            if (!gatt.requestMtu(PREFERRED_MTU)) startNotifications(gatt, ready)
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (descriptor.uuid != CCCD_UUID) return
-            if (status != BluetoothGatt.GATT_SUCCESS) connectError.set("Could not enable Bluetooth notifications: $status")
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                connectError.set("Could not enable Bluetooth notifications: $status")
+            } else {
+                gatt.readPhy()
+            }
             ready.countDown()
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) this@BleGattSerial.mtu = mtu
+            startNotifications(gatt, ready)
+        }
+
+        override fun onPhyUpdate(gatt: BluetoothGatt, txPhy: Int, rxPhy: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                this@BleGattSerial.txPhy = txPhy
+                this@BleGattSerial.rxPhy = rxPhy
+            }
+        }
+
+        override fun onPhyRead(gatt: BluetoothGatt, txPhy: Int, rxPhy: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                this@BleGattSerial.txPhy = txPhy
+                this@BleGattSerial.rxPhy = rxPhy
+            }
         }
 
         @Deprecated("Used on Android 12 and earlier")
@@ -202,23 +220,71 @@ class BleGattSerial(private val context: Context) : CtgByteTransport {
         }
     }
 
+    @Synchronized
+    private fun startNotifications(gatt: BluetoothGatt, ready: CountDownLatch) {
+        if (notificationSetupStarted) return
+        notificationSetupStarted = true
+        val tx = txCharacteristic
+        if (tx == null || !gatt.setCharacteristicNotification(tx, true)) {
+            connectError.set("CITS-to-go Bluetooth TX characteristic unavailable")
+            ready.countDown()
+            return
+        }
+        val cccd = tx.getDescriptor(CCCD_UUID)
+        if (cccd == null) {
+            connectError.set("Bluetooth notification descriptor missing")
+            ready.countDown()
+            return
+        }
+        val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                gatt.writeDescriptor(cccd)
+            }
+        }
+        if (!started) {
+            connectError.set("Could not enable Bluetooth notifications")
+            ready.countDown()
+        }
+    }
+
     override fun read(buffer: ByteArray, timeoutMs: Int): Int {
         if (closed) throw IOException("Bluetooth transport is closed")
-        var chunk = pendingRead
-        if (chunk == null) {
-            chunk = incoming.poll(timeoutMs.toLong(), TimeUnit.MILLISECONDS) ?: return 0
-            if (chunk === DISCONNECTED || chunk.isEmpty()) throw IOException(connectError.get() ?: "Bluetooth disconnected")
-            pendingRead = chunk
-            pendingReadOffset = 0
+        if (buffer.isEmpty()) return 0
+
+        var total = 0
+        while (total < buffer.size) {
+            var chunk = pendingRead
+            if (chunk == null) {
+                chunk = if (total == 0) {
+                    incoming.poll(timeoutMs.toLong(), TimeUnit.MILLISECONDS) ?: return 0
+                } else {
+                    incoming.poll() ?: break
+                }
+                pendingRead = chunk
+                pendingReadOffset = 0
+            }
+
+            if (chunk === DISCONNECTED || chunk.isEmpty()) {
+                if (total > 0) return total
+                pendingRead = null
+                pendingReadOffset = 0
+                throw IOException(connectError.get() ?: "Bluetooth disconnected")
+            }
+
+            val count = minOf(buffer.size - total, chunk.size - pendingReadOffset)
+            System.arraycopy(chunk, pendingReadOffset, buffer, total, count)
+            total += count
+            pendingReadOffset += count
+            if (pendingReadOffset >= chunk.size) {
+                pendingRead = null
+                pendingReadOffset = 0
+            }
         }
-        val count = minOf(buffer.size, chunk.size - pendingReadOffset)
-        System.arraycopy(chunk, pendingReadOffset, buffer, 0, count)
-        pendingReadOffset += count
-        if (pendingReadOffset >= chunk.size) {
-            pendingRead = null
-            pendingReadOffset = 0
-        }
-        return count
+        return total
     }
 
     override fun writeAll(buffer: ByteArray, timeoutMs: Int) {
@@ -278,6 +344,7 @@ class BleGattSerial(private val context: Context) : CtgByteTransport {
         val RX_UUID: UUID = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e")
         val TX_UUID: UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
         private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        private const val PREFERRED_MTU = 517
         private val DISCONNECTED = ByteArray(0)
     }
 }

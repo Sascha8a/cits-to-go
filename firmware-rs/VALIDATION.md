@@ -1,5 +1,14 @@
 # Validation — 2026-09-01
 
+> **2026-09-03 transport/debug note:** The full-link measurements below are the
+> 2026-09-01 baseline and predate the USB/BLE throughput changes and type-6
+> statistics telemetry. Current defaults use 12 BLE output slots. The current
+> workspace passed the build-script regressions plus standalone Kotlin protocol/
+> statistics decode-dispatch checks; a complete Android Gradle build and updated
+> ESP-IDF/Rust firmware link were not possible in this sandbox because their
+> pinned toolchains are unavailable offline. See `../docs/TRANSPORT_PERFORMANCE_REFACTOR.md`
+> and `../docs/DEBUG_DIAGNOSTICS.md`.
+
 ## Completed
 
 - **14 host tests passed** with the normal 2352-byte packet limit, including
@@ -14,8 +23,9 @@
   Rust/Embassy, the new platform adapter, NimBLE adapter and private radio adapter.
 - **ESP-IDF image/partition size checks passed.** A merged image was created with
   esptool and its application/partition segments checked against build outputs.
-- Original Android and C firmware files are unchanged; only the repository
-  README and new `firmware-rs/` tree differ from the supplied source archive.
+- At the time of this 2026-09-01 baseline, the original Android and C firmware
+  files were unchanged; later 2026-09-03 transport/debug work modifies Android
+  and the Rust firmware platform adapter as documented above.
 
 Build versions:
 
@@ -99,7 +109,7 @@ triggered `fullclean`, and the app wrapper supplied a bare source store path to
 These are linker results, **not measurements of runtime free heap**, packet
 throughput, latency or energy use. Runtime stack/driver allocations still need
 to fit in available SRAM. The defaults were reduced to 8 capture slots, 4 TX
-slots, 4 USB output slots, 8 BLE output slots and a 16 KiB task arena to preserve
+slots, 4 USB output slots, 12 BLE output slots and a 16 KiB task arena to preserve
 headroom. Capture and control transport queues are independently bounded.
 
 `dist/cits-to-go-firmware-rs.bin` is the merged image for offset **0x0**.

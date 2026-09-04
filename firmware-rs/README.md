@@ -1,11 +1,13 @@
 # CITS-to-go — Rust / Embassy firmware
 
 New implementation for the **Seeed Studio XIAO ESP32-C5**, alongside the original
-`../firmware`. The Android application and CTG1 wire protocol are unchanged.
+`../firmware`. The existing CTG1 capture/transmit framing remains compatible; this
+version additionally emits the optional type-6 firmware statistics record consumed
+by the Android Debug page.
 
 The packet pipeline, framing, parsers, buffer ownership and application scheduling
-are Rust. Embassy runs four kinds of task: capture forwarding, USB input, BLE
-input and radio transmission. A small platform adapter and the retained NimBLE
+are Rust. Embassy runs five kinds of task: capture forwarding, USB input, BLE
+input, statistics reporting and radio transmission. A small platform adapter and the retained NimBLE
 and private-radio adapters are C. ESP-IDF still supplies the Wi-Fi/BLE binary
 libraries, USB interrupt driver, persistent bond store and FreeRTOS.
 
@@ -202,14 +204,18 @@ validation against the pinned binary libraries.
   driver. USB backpressure waits on notification when Rust's input pool fills.
 - A dedicated radio worker contains the potentially blocking proprietary Wi-Fi
   mutex acquisition. It never blocks Embassy or the NimBLE host.
-- USB and BLE output are independent. USB has four static output slots and
-  prioritizes control records. Both transports reserve two free output slots for
-  control, preventing captures from exhausting all reply capacity.
+- USB and BLE output are independent. USB has four static output slots. BLE
+  has a separately configurable output pool (12 slots by default), so BLE burst
+  capacity is no longer coupled to the Wi-Fi RX pool. Both transports reserve
+  two free output slots for control; BLE also has distinct capture/control queues
+  and selects control records first at record boundaries.
 - USB has one writer, so record bytes never interleave. Partial writes use one
   deadline for the whole frame and insert a delimiter before the next record.
-- BLE writes and notifications are chunks of the same stream. Notifications
-  wait on completion signals when NimBLE buffers are exhausted, with a 250 ms
-  retry timeout and one-second no-progress limit. A failed partial notification
+- BLE writes and notifications are chunks of the same stream. The BLE writer
+  fills each ATT notification up to the negotiated payload size and can pack
+  multiple small CTG1 records into one notification. Notifications wait on
+  completion signals when NimBLE buffers are exhausted, checking at 250 ms
+  intervals with a one-second no-progress limit. A failed partial notification
   stream is disconnected to resynchronize. Connection generations prevent
   queued output from being delivered to a later connection with a reused handle.
   Each BLE output record has a leading delimiter to recover after subscription
@@ -217,8 +223,12 @@ validation against the pinned binary libraries.
 - Overlong input is discarded through its delimiter. BLE RX overflow rejects
   the chunk and discards through the next delimiter. Disconnect resets partial
   BLE input. A failed chunk cannot be spliced into a valid request.
-- Explicit cooperative yields after each processed chunk/frame prevent a full
-  queue from monopolizing the executor.
+- Cooperative yields occur after short bursts of capture/input work rather than
+  after every item, preserving fairness without paying a wake/poll cycle per
+  packet. Radio TX already suspends on its completion signal and needs no extra
+  yield.
+- The activity LED starts one timer per pulse instead of restarting its timer on
+  every accepted packet, avoiding high-rate timer-queue churn.
 
 The application does not enable automatic light sleep or radio power-saving:
 continuous promiscuous capture needs the receiver running. Lower CPU overhead
@@ -230,7 +240,8 @@ control responses (including write-without-response BLE input). Every parsed
 request produces a result or admission error, but delivery over a disconnected
 or saturated transport is not guaranteed. Android should retain its request
 timeout/retry policy. Debugger-visible counters include `CITS_RX_NO_BUFFER`,
-`CITS_RX_TOO_LARGE`, `CITS_BLE_INPUT_DROPS`, `CITS_OUTPUT_DROPS` and the platform
+`CITS_RX_TOO_LARGE`, `CITS_BLE_INPUT_DROPS`, `CITS_OUTPUT_DROPS`,
+`CITS_USB_OUTPUT_DROPS`, `CITS_BLE_OUTPUT_DROPS` and the platform
 `usb_partial_drops`. No textual logs are mixed into the CTG1 byte stream.
 
 ## Configuration and memory
@@ -245,9 +256,10 @@ bounds come from the same configuration. Standalone host tests use defaults.
 The Android encoder currently caps TX at 2352 bytes; raising the firmware limit
 alone does not raise that Android cap.
 
-Default application buffer/task storage is about 77 KiB: 8 capture slots,
+Default application buffer/task storage is now about 87 KiB: 8 capture slots,
 4 TX slots, two 4-slot input pools, a 16 KiB Embassy task arena, 4 USB output
-slots and 8 BLE output slots. These defaults reduce fixed SRAM usage; increase
+slots and 12 BLE output slots. These defaults trade roughly 9.6 KiB of additional
+static BLE burst buffering for fewer short-stall drops; increase
 queue depths only after checking the memory map and minimum runtime free heap.
 The NimBLE MSYS-2 pool uses 24 blocks. Driver buffers, task stacks, the Bluetooth /
 Wi-Fi heaps, and IDF static data need additional memory. The IDF main-task stack
@@ -267,3 +279,7 @@ routing and concurrent pool reuse.
 
 No new over-the-air packet generator is introduced here; CAM and SREM generators
 and their JVM/PCAP/Wireshark tests remain in the unchanged Android project.
+
+## 1 Hz diagnostic statistics
+
+The firmware emits CTG1 type 6 once per second as a control/diagnostic record. It reports eligible Wi-Fi RX and accepted-capture rates, USB/BLE capture-output rates, transport byte/notification rates, queue occupancy, cumulative drop/error counters, and current BLE MTU/connection/PHY parameters. The periodic ESP timer only wakes an Embassy task; framing and transport submission remain outside the timer callback. See `../docs/DEBUG_DIAGNOSTICS.md` for the wire layout and counter interpretation.
