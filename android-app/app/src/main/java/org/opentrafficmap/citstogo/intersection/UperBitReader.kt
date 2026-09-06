@@ -32,7 +32,9 @@ internal class UperBitReader(private val bytes: ByteArray, byteOffset: Int = 0) 
         constrained(minimum.toLong(), maximum.toLong()).toInt()
 
     fun skipBits(width: Int) {
-        bits(width)
+        require(width >= 0)
+        if (remainingBits < width) throw IntersectionDecodeException("PER payload ended early")
+        bitOffset += width
     }
 
     fun skipNormallySmallLength() {

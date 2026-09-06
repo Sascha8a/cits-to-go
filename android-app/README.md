@@ -117,3 +117,7 @@ After enrollment, select **Bluetooth** and start normally. Android and NimBLE au
 ## Debug diagnostics
 
 Enable **Settings → Debug menu** to add a Debug destination to the navigation drawer. It shows Android CTG stream-gap/protocol counters, Android BLE MTU/PHY state, and the firmware's 1 Hz CTG1 statistics record including Wi-Fi RX/capture/output rates, queue occupancy, drop counters, BLE notifications, connection interval/latency/supervision timeout and PHY. See `../docs/DEBUG_DIAGNOSTICS.md` for interpretation.
+
+## Intersection packet parsing
+
+MAPEM/SPATEM extraction supports both unsecured and secured GeoNetworking. Secured packets are parsed without assuming a fixed security-header size, and the GeoNetworking payload length bounds the ITS PDU so security trailers are excluded before UPER decoding. MAPEM regional open types that are not needed for standard lane geometry are safely skipped. Enable the Debug menu to inspect intersection extraction/decoding counters and the latest decoder error. See `../docs/INTERSECTION_DECODING.md`.

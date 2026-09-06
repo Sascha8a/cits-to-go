@@ -124,6 +124,7 @@ import org.opentrafficmap.citstogo.flashing.Esp32RomFlasher
 import org.opentrafficmap.citstogo.flashing.EspFlashTransport
 import org.opentrafficmap.citstogo.flashing.FirmwareFileReader
 import org.opentrafficmap.citstogo.flashing.FirmwareRelease
+import org.opentrafficmap.citstogo.intersection.IntersectionDiagnostics
 import org.opentrafficmap.citstogo.intersection.IntersectionSnapshot
 import org.opentrafficmap.citstogo.intersection.IntersectionSnapshotList
 import org.opentrafficmap.citstogo.intersection.LaneConnection
@@ -337,6 +338,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 camSent = intent.getLongExtra(CitsBridgeService.EXTRA_CAM_SENT, 0),
                 firmwareStatistics = intent.serializableExtra<FirmwareStatistics>(CitsBridgeService.EXTRA_FIRMWARE_STATISTICS),
                 bleDebugParameters = intent.serializableExtra<BleDebugParameters>(CitsBridgeService.EXTRA_BLE_DEBUG_PARAMETERS),
+                intersectionDiagnostics = intent.serializableExtra<IntersectionDiagnostics>(CitsBridgeService.EXTRA_INTERSECTION_DIAGNOSTICS),
                 lastSremState = intent.getStringExtra(CitsBridgeService.EXTRA_SREM_STATE).orEmpty(),
                 lastSremSummary = intent.getStringExtra(CitsBridgeService.EXTRA_SREM_SUMMARY).orEmpty(),
                 lastSremRequestId = intent.getIntExtra(CitsBridgeService.EXTRA_SREM_REQUEST_ID, -1),
@@ -3452,6 +3454,7 @@ private fun DebugPage(
 ) {
     val stats = status.firmwareStatistics
     val androidBle = status.bleDebugParameters
+    val intersections = status.intersectionDiagnostics
 
     DebugSection("Android stream") {
         DebugRow("Connection", connectionMode.label)
@@ -3506,6 +3509,35 @@ private fun DebugPage(
             DebugRow("Accepted total", stats.capturedPacketsTotal.toString())
             DebugRow("USB capture total", stats.usbCapturePacketsTotal.toString())
             DebugRow("BLE capture total", stats.bleCapturePacketsTotal.toString())
+        }
+    }
+
+    DebugSection("Intersection decoding") {
+        if (intersections == null) {
+            Text("No intersection diagnostics available yet.", color = MaterialTheme.colorScheme.secondary)
+        } else {
+            DebugRow("Frames inspected", intersections.framesInspected.toString())
+            DebugRow("ITS packets extracted", intersections.itsPacketsExtracted.toString())
+            DebugRow("Secured ITS packets", intersections.securedItsPackets.toString())
+            DebugRow("Other / unsupported GN", intersections.unsupportedGeoNetworkingFrames.toString())
+            DebugRow("MAPEM decoded", "${intersections.mapemDecoded}/${intersections.mapemSeen}")
+            DebugRow("MAPEM failures", intersections.mapemDecodeFailures.toString())
+            DebugRow("SPATEM decoded", "${intersections.spatemDecoded}/${intersections.spatemSeen}")
+            DebugRow("SPATEM failures", intersections.spatemDecodeFailures.toString())
+            if (intersections.lastDecodeError.isNotBlank()) {
+                Text(
+                    "Last decode error: ${intersections.lastDecodeError}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (intersections.lastExtractionIssue.isNotBlank()) {
+                Text(
+                    "Last extraction issue: ${intersections.lastExtractionIssue}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            }
         }
     }
 

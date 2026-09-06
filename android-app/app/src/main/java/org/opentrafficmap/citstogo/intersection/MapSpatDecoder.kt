@@ -38,9 +38,10 @@ object MapSpatDecoder {
         } else {
             emptyList()
         }
-        if (hasRoadSegments || hasDataParameters || hasRestrictionList || hasRegional) {
+        if (hasRoadSegments || hasDataParameters || hasRestrictionList) {
             throw IntersectionDecodeException("Unsupported MAPEM optional branch")
         }
+        if (hasRegional) reader.regionalExtensions()
         return intersections
     }
 
@@ -59,9 +60,10 @@ object MapSpatDecoder {
         val laneWidth = if (hasLaneWidth) reader.constrained(0, 32767).toInt() else null
         if (hasSpeedLimits) repeat(reader.sequenceLength(1, 9)) { reader.regulatorySpeedLimit() }
         val lanes = List(reader.sequenceLength(1, 255)) { reader.genericLane() }
-        if (hasPreemptPriority || hasRegional) {
-            throw IntersectionDecodeException("Unsupported IntersectionGeometry optional branch")
+        if (hasPreemptPriority) {
+            throw IntersectionDecodeException("Unsupported IntersectionGeometry preemptPriorityData")
         }
+        if (hasRegional) reader.regionalExtensions()
         return MapIntersection(
             key = key,
             name = name,
@@ -191,7 +193,7 @@ object MapSpatDecoder {
             emptyList()
         }
         if (hasOverlays) repeat(sequenceLength(1, 5)) { constrained(0, 255) }
-        if (hasRegional) throw IntersectionDecodeException("GenericLane regional extensions are not supported")
+        if (hasRegional) regionalExtensions()
         return MapLane(
             id = laneId,
             ingressApproach = ingressApproach,
@@ -220,7 +222,7 @@ object MapSpatDecoder {
             5 -> skipBits(16)
             else -> throw IntersectionDecodeException("Unsupported LaneTypeAttributes extension")
         }
-        if (hasRegional) throw IntersectionDecodeException("LaneAttributes regional extension is not supported")
+        if (hasRegional) regionalExtensions()
         return LaneAttrs(
             type = when (typeIndex) {
                 0 -> LaneType.Vehicle
@@ -283,7 +285,7 @@ object MapSpatDecoder {
         if (hasData) repeat(sequenceLength(1, 8)) { laneDataAttribute() }
         val width = if (hasWidth) signedConstrained(-512, 511) else null
         if (hasElevation) signedConstrained(-512, 511)
-        if (hasRegional) throw IntersectionDecodeException("NodeAttributeSetXY regional extension is not supported")
+        if (hasRegional) regionalExtensions()
         return NodeAttrs(stopLine, width)
     }
 
@@ -342,7 +344,7 @@ object MapSpatDecoder {
         if (hasAvailableStorageLength) constrained(0, 10000)
         if (hasWaitOnStop) bit()
         if (hasPedBicycleDetect) bit()
-        if (hasRegional) throw IntersectionDecodeException("ConnectionManeuverAssist regional extensions are not supported")
+        if (hasRegional) regionalExtensions()
         return connectionId
     }
 
@@ -361,7 +363,7 @@ object MapSpatDecoder {
         val lat = constrained(-900000000, 900000001).toInt()
         val lon = constrained(-1800000000, 1800000001).toInt()
         if (hasElevation) constrained(-4096, 61439)
-        if (hasRegional) throw IntersectionDecodeException("Position3D regional extensions are not supported")
+        if (hasRegional) regionalExtensions()
         return lat to lon
     }
 

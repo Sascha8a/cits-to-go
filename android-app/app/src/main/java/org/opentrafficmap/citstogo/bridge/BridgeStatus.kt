@@ -24,6 +24,7 @@ data class BridgeStatus(
     val camSent: Long = 0,
     val firmwareStatistics: org.opentrafficmap.citstogo.protocol.FirmwareStatistics? = null,
     val bleDebugParameters: BleDebugParameters? = null,
+    val intersectionDiagnostics: org.opentrafficmap.citstogo.intersection.IntersectionDiagnostics? = null,
     val lastSremState: String = "",
     val lastSremSummary: String = "",
     val lastSremRequestId: Int = -1,

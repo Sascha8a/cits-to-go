@@ -9,76 +9,67 @@ data class ItsPacket(
     val payload: ByteArray,
     val sourceLatitude: Int?,
     val sourceLongitude: Int?,
+    val geonetworkingSecured: Boolean = false,
 )
 
+sealed interface ItsExtractionResult {
+    data class Success(val packet: ItsPacket) : ItsExtractionResult
+    data object NotGeoNetworking : ItsExtractionResult
+    data class Unsupported(val reason: String, val secured: Boolean) : ItsExtractionResult
+}
+
 object ItsFrameExtractor {
-    private val SNAP_GEONETWORKING = byteArrayOf(
-        0xaa.toByte(), 0xaa.toByte(), 0x03, 0x00, 0x00, 0x00, 0x89.toByte(), 0x47,
-    )
+    fun extract(frame: ByteArray): ItsPacket? = when (val result = extractDetailed(frame)) {
+        is ItsExtractionResult.Success -> result.packet
+        ItsExtractionResult.NotGeoNetworking,
+        is ItsExtractionResult.Unsupported -> null
+    }
 
-    fun extract(frame: ByteArray): ItsPacket? {
-        val snapOffset = frame.indexOf(SNAP_GEONETWORKING)
-        if (snapOffset < 0) return null
-        val geoOffset = snapOffset + SNAP_GEONETWORKING.size
-        if (frame.size < geoOffset + 12) return null
-
-        val commonOffset = geoOffset + 4
-        val commonNextHeader = (frame[commonOffset].toInt() ushr 4) and 0x0f
-        if (commonNextHeader != NEXT_HEADER_BTP_B) return null
-        val headerType = frame[commonOffset + 1].toInt() and 0xf0
-        val btpOffset = when (headerType) {
-            HEADER_TYPE_SHB -> geoOffset + 40
-            HEADER_TYPE_GBC -> geoOffset + 56
-            else -> return null
+    fun extractDetailed(frame: ByteArray): ItsExtractionResult {
+        val geo = when (val result = GeoNetworkingFrameParser.parse(frame)) {
+            is GeoNetworkingParseResult.Success -> result.payload
+            GeoNetworkingParseResult.NotGeoNetworking -> return ItsExtractionResult.NotGeoNetworking
+            is GeoNetworkingParseResult.Unsupported -> {
+                return ItsExtractionResult.Unsupported(result.reason, result.secured)
+            }
         }
-        if (frame.size < btpOffset + 10) return null
+
+        val btpOffset = geo.btpOffset
+        if (frame.size < btpOffset + BTP_HEADER_LEN + ITS_PDU_HEADER_LEN) {
+            return ItsExtractionResult.Unsupported("Truncated BTP/ITS payload", geo.secured)
+        }
         val destinationPort = u16(frame, btpOffset)
-        val itsOffset = btpOffset + 4
+        val itsOffset = btpOffset + BTP_HEADER_LEN
+        val itsPayloadLength = geo.payloadLength - BTP_HEADER_LEN
+        val itsEnd = itsOffset + itsPayloadLength
+        if (itsPayloadLength < ITS_PDU_HEADER_LEN || itsEnd > frame.size) {
+            return ItsExtractionResult.Unsupported("Invalid GeoNetworking payload length", geo.secured)
+        }
+
         val protocolVersion = frame[itsOffset].toInt() and 0xff
         val messageId = frame[itsOffset + 1].toInt() and 0xff
         val stationId = u32(frame, itsOffset + 2)
-        return ItsPacket(
-            destinationPort = destinationPort,
-            protocolVersion = protocolVersion,
-            messageId = messageId,
-            stationId = stationId,
-            bodyOffset = 6,
-            payload = frame.copyOfRange(itsOffset, frame.size),
-            sourceLatitude = i32OrNull(frame, geoOffset + 4 + 8 + 4 + 8 + 4),
-            sourceLongitude = i32OrNull(frame, geoOffset + 4 + 8 + 4 + 8 + 8),
+        return ItsExtractionResult.Success(
+            ItsPacket(
+                destinationPort = destinationPort,
+                protocolVersion = protocolVersion,
+                messageId = messageId,
+                stationId = stationId,
+                bodyOffset = ITS_PDU_HEADER_LEN,
+                payload = frame.copyOfRange(itsOffset, itsEnd),
+                sourceLatitude = geo.sourceLatitude,
+                sourceLongitude = geo.sourceLongitude,
+                geonetworkingSecured = geo.secured,
+            ),
         )
-    }
-
-    private fun ByteArray.indexOf(pattern: ByteArray): Int {
-        if (pattern.isEmpty() || size < pattern.size) return -1
-        for (offset in 0..size - pattern.size) {
-            var matched = true
-            for (i in pattern.indices) {
-                if (this[offset + i] != pattern[i]) {
-                    matched = false
-                    break
-                }
-            }
-            if (matched) return offset
-        }
-        return -1
     }
 
     private fun u16(bytes: ByteArray, offset: Int): Int =
         ((bytes[offset].toInt() and 0xff) shl 8) or (bytes[offset + 1].toInt() and 0xff)
 
     private fun u32(bytes: ByteArray, offset: Int): Long =
-        ((u16(bytes, offset).toLong()) shl 16) or u16(bytes, offset + 2).toLong()
+        (u16(bytes, offset).toLong() shl 16) or u16(bytes, offset + 2).toLong()
 
-    private fun i32OrNull(bytes: ByteArray, offset: Int): Int? {
-        if (bytes.size < offset + 4) return null
-        return ((bytes[offset].toInt() and 0xff) shl 24) or
-            ((bytes[offset + 1].toInt() and 0xff) shl 16) or
-            ((bytes[offset + 2].toInt() and 0xff) shl 8) or
-            (bytes[offset + 3].toInt() and 0xff)
-    }
-
-    private const val NEXT_HEADER_BTP_B = 2
-    private const val HEADER_TYPE_GBC = 0x40
-    private const val HEADER_TYPE_SHB = 0x50
+    private const val BTP_HEADER_LEN = 4
+    private const val ITS_PDU_HEADER_LEN = 6
 }

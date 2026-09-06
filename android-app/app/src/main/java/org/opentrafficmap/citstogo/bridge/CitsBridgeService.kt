@@ -599,13 +599,9 @@ class CitsBridgeService : Service() {
     }
 
     private fun updateIntersection(packet: ByteArray) {
-        try {
-            intersectionStore.accept(packet)?.let {
-                refreshIntersectionSnapshots()
-                intersectionSnapshot = intersectionSnapshots.firstOrNull() ?: it
-            }
-        } catch (_: Exception) {
-            // MAPEM/SPATEM decoding is best-effort; malformed or unsupported messages should not affect capture.
+        intersectionStore.accept(packet)?.let {
+            refreshIntersectionSnapshots()
+            intersectionSnapshot = intersectionSnapshots.firstOrNull() ?: it
         }
     }
 
@@ -1222,6 +1218,7 @@ class CitsBridgeService : Service() {
             camEnabled = camEnabled,
             camSent = camSent,
             bleDebugParameters = (serial as? BleGattSerial)?.debugParameters(),
+            intersectionDiagnostics = intersectionStore.diagnostics(),
             mqttState = when {
                 !mqttEnabled -> "Disabled"
                 mqttClient.isConnected() -> "Connected"
@@ -1253,6 +1250,7 @@ class CitsBridgeService : Service() {
         intent.putExtra(EXTRA_CAM_SENT, status.camSent)
         status.firmwareStatistics?.let { intent.putExtra(EXTRA_FIRMWARE_STATISTICS, it) }
         status.bleDebugParameters?.let { intent.putExtra(EXTRA_BLE_DEBUG_PARAMETERS, it) }
+        status.intersectionDiagnostics?.let { intent.putExtra(EXTRA_INTERSECTION_DIAGNOSTICS, it) }
         intent.putExtra(EXTRA_SREM_STATE, status.lastSremState)
         intent.putExtra(EXTRA_SREM_SUMMARY, status.lastSremSummary)
         intent.putExtra(EXTRA_SREM_REQUEST_ID, status.lastSremRequestId)
@@ -1523,6 +1521,7 @@ class CitsBridgeService : Service() {
         const val EXTRA_TRANSPORT_DROPPED = "transportDropped"
         const val EXTRA_FIRMWARE_STATISTICS = "firmwareStatistics"
         const val EXTRA_BLE_DEBUG_PARAMETERS = "bleDebugParameters"
+        const val EXTRA_INTERSECTION_DIAGNOSTICS = "intersectionDiagnostics"
         const val EXTRA_PROTOCOL_ERRORS = "protocolErrors"
         const val EXTRA_LAST_PACKET = "lastPacket"
         const val EXTRA_LAST_ERROR = "lastError"
