@@ -41,6 +41,23 @@
     <!-- Save -->
     <string name="save">Save</string>
 
+    <!-- About Page -->
+    <string name="about_title">About</string>
+    <string name="about_app_name">C-ITS to go</string>
+    <string name="about_app_description">Experimental C-ITS capture and transmit bridge for Android.</string>
+    <string name="about_developer_title">Developer</string>
+    <string name="about_project_title">About this project</string>
+    <string name="about_project_paragraph1">CITS-to-go is an experimental, portable C-ITS capture and transmit bridge built around an Android phone and a Seeed Studio XIAO ESP32-C5.</string>
+    <string name="about_project_paragraph2">It can capture C-ITS packets, stream them to Android over USB, save captures as PCAP, forward packets to MQTT, transmit raw 802.11 frames, and generate configurable ETSI CAM messages from phone location data.</string>
+    <string name="about_project_paragraph3">The project is heavily inspired by and derived from OpenTrafficMap and is not an official OpenTrafficMap release.</string>
+    <string name="about_links_title">Links</string>
+    <string name="about_source_code_label">Source code on Codeberg</string>
+    <string name="about_opentrafficmap_label">OpenTrafficMap</string>
+    <string name="about_thanks_title">Thanks</string>
+    <string name="about_thanks_text">Thanks to the OpenTrafficMap Community and all contributors!</string>
+    <string name="cd_about_app_logo">C-ITS to go app logo</string>
+    <string name="cd_open_external_link">Open external link</string>
+
     <!-- Content Descriptions -->
     <string name="cd_open_menu">Open navigation menu</string>
     <string name="cd_mqtt_broker_link">Broker link</string>

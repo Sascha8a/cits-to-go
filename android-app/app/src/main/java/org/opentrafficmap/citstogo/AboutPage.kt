@@ -2,72 +2,448 @@ package org.opentrafficmap.citstogo
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.Color
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import org.opentrafficmap.citstogo.update.CodebergAppUpdateChecker
 
 @Composable
 fun AboutPage() {
     val context = LocalContext.current
+
     fun open(url: String) {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
+
     Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Color.White, RoundedCornerShape(8.dp))
-            .padding(16.dp),
+        modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("C-ITS to go", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-        Text("Version ${BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.secondary)
-        Text(
-            "Developed by Alexander Lampalzer",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            "Contact: sascha@localhost.systems",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            "CITS-to-go is an experimental, portable C-ITS capture and transmit bridge built around an Android phone and a Seeed Studio XIAO ESP32-C5.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            "It can capture C-ITS packets, stream them to Android over USB, save captures as PCAP, forward packets to MQTT, transmit raw 802.11 frames, and generate configurable ETSI CAM messages from phone location data.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            "The project is heavily inspired by and derived from OpenTrafficMap and is not an official OpenTrafficMap release.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            "Source code on Codeberg",
-            modifier = Modifier.clickable { open(CodebergAppUpdateChecker.REPOSITORY_URL) },
-            color = MaterialTheme.colorScheme.primary,
-            textDecoration = TextDecoration.Underline,
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            "OpenTrafficMap",
-            modifier = Modifier.clickable { open("https://opentrafficmap.org") },
-            color = MaterialTheme.colorScheme.primary,
-            textDecoration = TextDecoration.Underline,
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        AppIdentityCard()
+        DeveloperCard()
+        ProjectInfoCard()
+        LinksCard(onOpenLink = { open(it) })
+        ThanksCard()
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun AppIdentityCard() {
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(ContextCompat.getColor(context, R.color.card)),
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(Color(ContextCompat.getColor(context, R.color.ic_launcher_background))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                    contentDescription = stringResource(R.string.cd_about_app_logo),
+                    modifier = Modifier.size(80.dp),
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.about_app_name),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                )
+                Text(
+                    text = "Version ${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(ContextCompat.getColor(context, R.color.on_surface_variant)),
+                )
+                Text(
+                    text = stringResource(R.string.about_app_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(ContextCompat.getColor(context, R.color.secondary)),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeveloperCard() {
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(ContextCompat.getColor(context, R.color.card)),
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color(ContextCompat.getColor(context, R.color.primary_container))),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Person,
+                        contentDescription = null,
+                        tint = Color(ContextCompat.getColor(context, R.color.primary)),
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.about_developer_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                    )
+                    Text(
+                        text = stringResource(R.string.author_name),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(ContextCompat.getColor(context, R.color.secondary)),
+                    )
+                    Text(
+                        text = stringResource(R.string.author_email),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(ContextCompat.getColor(context, R.color.on_surface_variant)),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProjectInfoCard() {
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(ContextCompat.getColor(context, R.color.card)),
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color(ContextCompat.getColor(context, R.color.primary_container))),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Info,
+                        contentDescription = null,
+                        tint = Color(ContextCompat.getColor(context, R.color.primary)),
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 14.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.about_project_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                    )
+                }
+            }
+
+            HorizontalDivider(
+                color = Color(ContextCompat.getColor(context, R.color.divider)),
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.about_project_paragraph1),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                )
+                Text(
+                    text = stringResource(R.string.about_project_paragraph2),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                )
+                Text(
+                    text = stringResource(R.string.about_project_paragraph3),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LinksCard(onOpenLink: (String) -> Unit) {
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(ContextCompat.getColor(context, R.color.card)),
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color(ContextCompat.getColor(context, R.color.primary_container))),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Link,
+                        contentDescription = null,
+                        tint = Color(ContextCompat.getColor(context, R.color.primary)),
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 14.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.about_links_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                    )
+                }
+            }
+
+            HorizontalDivider(
+                color = Color(ContextCompat.getColor(context, R.color.divider)),
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                LinkRow(
+                    label = stringResource(R.string.about_source_code_label),
+                    url = CodebergAppUpdateChecker.REPOSITORY_URL,
+                    onOpenLink = onOpenLink,
+                )
+                HorizontalDivider(
+                    color = Color(ContextCompat.getColor(context, R.color.divider)),
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+                LinkRow(
+                    label = stringResource(R.string.about_opentrafficmap_label),
+                    url = "https://opentrafficmap.org",
+                    onOpenLink = onOpenLink,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LinkRow(
+    label: String,
+    url: String,
+    onOpenLink: (String) -> Unit,
+) {
+    val context = LocalContext.current
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .clickable { onOpenLink(url) }
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+            )
+            Text(
+                text = url,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(ContextCompat.getColor(context, R.color.on_surface_variant)),
+                maxLines = 1,
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Link,
+                contentDescription = stringResource(R.string.cd_open_external_link),
+                tint = Color(ContextCompat.getColor(context, R.color.primary)),
+                modifier = Modifier.size(18.dp),
+            )
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = Color(ContextCompat.getColor(context, R.color.on_surface_variant)),
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThanksCard() {
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(ContextCompat.getColor(context, R.color.primary_container)),
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color(ContextCompat.getColor(context, R.color.success_container))),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Favorite,
+                        contentDescription = null,
+                        tint = Color(ContextCompat.getColor(context, R.color.success)),
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.about_thanks_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                    )
+                    Text(
+                        text = stringResource(R.string.about_thanks_text),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(ContextCompat.getColor(context, R.color.secondary)),
+                    )
+                }
+            }
+        }
     }
 }

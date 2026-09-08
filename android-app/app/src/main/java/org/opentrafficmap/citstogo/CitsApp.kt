@@ -253,7 +253,7 @@ fun CitsApp(
                         modifier = contentModifier,
                         verticalArrangement = Arrangement.spacedBy(if (selectedPage == AppPage.Home) 10.dp else 14.dp),
                     ) {
-                        val headerSubtitle = if (selectedPage == AppPage.Settings) {
+                        val headerSubtitle = if (selectedPage == AppPage.Settings || selectedPage == AppPage.About) {
                             "Version ${BuildConfig.VERSION_NAME}"
                         } else {
                             null
