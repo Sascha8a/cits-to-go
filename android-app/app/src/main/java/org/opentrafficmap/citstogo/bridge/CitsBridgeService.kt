@@ -487,7 +487,19 @@ class CitsBridgeService : Service() {
             storeDiscoveredMacAddresses()
             sendStationDiscoveryNotification(discoveredMacAddress)
         }
-        val summary = "#${packet.sequence} ${packet.payload.size}B ${packet.frequencyMhz}MHz ${packet.rssiDbm}dBm"
+        val itsType = org.opentrafficmap.citstogo.intersection.ItsFrameExtractor
+            .extract(packet.payload)
+            ?.messageId
+            ?.let(::itsMessageLabel)
+        val frequency = packet.frequencyMhz.takeIf { it > 0 }?.let { "$it MHz" } ?: "— MHz"
+        val rssi = packet.rssiDbm.takeIf { it != 0 }?.let { "$it dBm" } ?: "— dBm"
+        val summary = buildList {
+            add("#${packet.sequence}")
+            itsType?.let(::add)
+            add("${packet.payload.size} B")
+            add(frequency)
+            add(rssi)
+        }.joinToString(" • ")
         if (publishToMqtt) queueMqttPacket(packet.payload)
         writePcap(packet)
         updateIntersection(packet.payload)
@@ -506,6 +518,17 @@ class CitsBridgeService : Service() {
             packetTopic = "its/$nodeId/packet",
         )
         if (shouldPublishPacketStatus()) publishStatus("Packet $summary")
+    }
+
+    private fun itsMessageLabel(messageId: Int): String? = when (messageId) {
+        1 -> "DENM"
+        2 -> "CAM"
+        4 -> "SPATEM"
+        5 -> "MAPEM"
+        6 -> "IVIM"
+        9 -> "SREM"
+        10 -> "SSEM"
+        else -> null
     }
 
     private fun startReplay(

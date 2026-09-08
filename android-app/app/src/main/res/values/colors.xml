@@ -1,3 +1,85 @@
 <resources>
+    <!-- Launcher -->
     <color name="ic_launcher_background">#083F3A</color>
+
+    <!-- Primary Brand Colors -->
+    <color name="primary">#0F766E</color>
+    <color name="primary_variant">#075E54</color>
+    <color name="primary_container">#E0F2F1</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="on_primary_container">#00A67E</color>
+
+    <!-- Secondary Colors -->
+    <color name="secondary">#475569</color>
+    <color name="secondary_variant">#64748B</color>
+    <color name="secondary_container">#E8EFF3</color>
+    <color name="on_secondary">#FFFFFF</color>
+    <color name="on_secondary_container">#294454</color>
+
+    <!-- Tertiary Colors -->
+    <color name="tertiary">#B45309</color>
+    <color name="on_tertiary">#FFFFFF</color>
+
+    <!-- Background & Surface -->
+    <color name="background">#EFF6F5</color>
+    <color name="surface">#F8FAFC</color>
+    <color name="surface_variant">#F4F7FA</color>
+    <color name="on_surface">#0F172A</color>
+    <color name="on_surface_variant">#64748B</color>
+
+    <!-- Error Colors -->
+    <color name="error">#B91C1C</color>
+    <color name="error_container">#FDE8E8</color>
+    <color name="on_error">#FFFFFF</color>
+    <color name="on_error_container">#B91C1C</color>
+
+    <!-- Warning Colors -->
+    <color name="warning">#D97706</color>
+    <color name="warning_container">#FFF3D6</color>
+    <color name="on_warning_container">#B86A00</color>
+
+    <!-- Success Colors -->
+    <color name="success">#16A34A</color>
+    <color name="success_variant">#047857</color>
+    <color name="success_container">#E0F2EF</color>
+    <color name="on_success_container">#0F9D83</color>
+
+    <!-- Info Colors -->
+    <color name="info">#2563EB</color>
+    <color name="info_container">#E5F1FA</color>
+    <color name="on_info_container">#315B78</color>
+
+    <!-- UI Components -->
+    <color name="card">#FFFFFF</color>
+    <color name="divider">#E2E8F0</color>
+    <color name="border">#CAD7DE</color>
+    <color name="border_active">#9DDED3</color>
+    <color name="disabled">#B9BDC4</color>
+
+    <!-- Status Indicator -->
+    <color name="status_indicator_active">#00A67E</color>
+    <color name="status_indicator_inactive">#78909C</color>
+
+    <!-- Lane Types (Intersection View) -->
+    <color name="lane_vehicle">#334155</color>
+    <color name="lane_crosswalk">#7C3AED</color>
+    <color name="lane_bike">#0891B2</color>
+    <color name="lane_sidewalk">#64748B</color>
+    <color name="lane_tracked_vehicle">#A16207</color>
+    <color name="lane_parking">#475569</color>
+    <color name="lane_other">#94A3B8</color>
+
+    <!-- Movement Phases -->
+    <color name="phase_stop">#DC2626</color>
+    <color name="phase_caution">#D97706</color>
+    <color name="phase_allowed">#16A34A</color>
+    <color name="phase_unknown">#64748B</color>
+
+    <!-- Confetti Colors -->
+    <color name="confetti_1">#0F766E</color>
+    <color name="confetti_2">#2563EB</color>
+    <color name="confetti_3">#B45309</color>
+    <color name="confetti_4">#DC2626</color>
+    <color name="confetti_5">#7C3AED</color>
+    <color name="confetti_6">#16A34A</color>
 </resources>
