@@ -43,7 +43,6 @@ import org.opentrafficmap.citstogo.bridge.BleDebugParameters
 import org.opentrafficmap.citstogo.bridge.BridgeStatus
 import org.opentrafficmap.citstogo.bridge.CitsBridgeService
 import org.opentrafficmap.citstogo.bridge.ConnectionMode
-import org.opentrafficmap.citstogo.cam.StationType
 import org.opentrafficmap.citstogo.flashing.CodebergReleaseClient
 import org.opentrafficmap.citstogo.flashing.Esp32RomFlasher
 import org.opentrafficmap.citstogo.flashing.EspFlashTransport
@@ -85,7 +84,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var intersectionSnapshots by mutableStateOf<List<IntersectionSnapshot>>(emptyList())
     private var intersectionSortMode by mutableStateOf(IntersectionSortMode.FirstReceived)
     private var currentPosition by mutableStateOf<DevicePosition?>(null)
-    private var camStationType by mutableStateOf(StationType.PEDESTRIAN)
     private var sremProfile by mutableStateOf(SremProfile.PEDESTRIAN)
     private var camIntervalMs by mutableStateOf(CitsBridgeService.DEFAULT_CAM_INTERVAL_MS.toString())
     private var txApproved by mutableStateOf(false)
@@ -284,10 +282,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 CitsBridgeService.DEFAULT_MQTT_MAX_QUEUE_AGE_MS,
             ),
         )
-        camStationType = StationType.selectableFromCode(
-            prefs.getInt(CitsBridgeService.PREF_CAM_STATION_TYPE, StationType.PEDESTRIAN.code))
         sremProfile = SremProfile.fromPreferenceCode(
-            prefs.getInt(CitsBridgeService.PREF_SREM_PROFILE, SremProfile.PEDESTRIAN.preferenceCode),
+            when {
+                prefs.contains(CitsBridgeService.PREF_VEHICLE_TYPE) ->
+                    prefs.getInt(CitsBridgeService.PREF_VEHICLE_TYPE, SremProfile.PEDESTRIAN.preferenceCode)
+                prefs.contains(CitsBridgeService.PREF_SREM_PROFILE) ->
+                    prefs.getInt(CitsBridgeService.PREF_SREM_PROFILE, SremProfile.PEDESTRIAN.preferenceCode)
+                else -> prefs.getInt(
+                    CitsBridgeService.PREF_CAM_STATION_TYPE,
+                    SremProfile.PEDESTRIAN.preferenceCode,
+                )
+            },
         )
         camIntervalMs = prefs.getInt(
             CitsBridgeService.PREF_CAM_INTERVAL_MS,
@@ -347,8 +352,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     onStopPcap = ::stopPcap,
                     onStartReplay = ::chooseReplayFile,
                     onStopReplay = ::stopReplay,
-                    camStationType = camStationType,
-                    onCamStationTypeChange = { camStationType = it },
                     camIntervalMs = camIntervalMs,
                     onCamIntervalChange = { camIntervalMs = it },
                     onConfigureCam = ::configureCam,
@@ -876,7 +879,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         camIntervalMs = interval.toString()
         sendServiceIntent(CitsBridgeService.ACTION_CONFIGURE_CAM) {
             putExtra(CitsBridgeService.EXTRA_CAM_ENABLED, enabled)
-            putExtra(CitsBridgeService.EXTRA_CAM_STATION_TYPE, camStationType.code)
+            putExtra(CitsBridgeService.EXTRA_CAM_STATION_TYPE, sremProfile.stationType.code)
             putExtra(CitsBridgeService.EXTRA_CAM_INTERVAL_MS, interval)
         }
     }
@@ -1069,7 +1072,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             .putString(CitsBridgeService.PREF_NODE_ID, nodeId)
             .putInt(CitsBridgeService.PREF_MQTT_MAX_QUEUE_LENGTH, parsedMaxQueueLength)
             .putLong(CitsBridgeService.PREF_MQTT_MAX_QUEUE_AGE_MS, parsedMaxQueueAgeMs)
-            .putInt(CitsBridgeService.PREF_SREM_PROFILE, sremProfile.preferenceCode)
+            .putInt(CitsBridgeService.PREF_VEHICLE_TYPE, sremProfile.preferenceCode)
             .apply()
     }
 

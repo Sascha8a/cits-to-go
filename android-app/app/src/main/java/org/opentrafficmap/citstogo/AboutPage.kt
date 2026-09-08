@@ -36,6 +36,14 @@ fun AboutPage() {
         Text("C-ITS to go", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Text("Version ${BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.secondary)
         Text(
+            "Developed by Alexander Lampalzer",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            "Contact: sascha@localhost.systems",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
             "CITS-to-go is an experimental, portable C-ITS capture and transmit bridge built around an Android phone and a Seeed Studio XIAO ESP32-C5.",
             style = MaterialTheme.typography.bodyMedium,
         )

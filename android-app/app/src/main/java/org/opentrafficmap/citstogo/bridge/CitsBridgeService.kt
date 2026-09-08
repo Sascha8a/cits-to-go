@@ -886,7 +886,7 @@ class CitsBridgeService : Service() {
         camEnabled = enabled
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putBoolean(PREF_CAM_ENABLED, camEnabled)
-            .putInt(PREF_CAM_STATION_TYPE, camStationType.code)
+            .putInt(PREF_VEHICLE_TYPE, camStationType.code)
             .putInt(PREF_CAM_INTERVAL_MS, camIntervalMs)
             .apply()
         handler.removeCallbacks(camBroadcaster)
@@ -1459,8 +1459,14 @@ class CitsBridgeService : Service() {
 
     private fun loadCamSettings() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        camStationType = StationType.selectableFromCode(
-            prefs.getInt(PREF_CAM_STATION_TYPE, StationType.PEDESTRIAN.code))
+        val vehicleTypeCode = when {
+            prefs.contains(PREF_VEHICLE_TYPE) ->
+                prefs.getInt(PREF_VEHICLE_TYPE, StationType.PEDESTRIAN.code)
+            prefs.contains(PREF_SREM_PROFILE) ->
+                prefs.getInt(PREF_SREM_PROFILE, StationType.PEDESTRIAN.code)
+            else -> prefs.getInt(PREF_CAM_STATION_TYPE, StationType.PEDESTRIAN.code)
+        }
+        camStationType = StationType.selectableFromCode(vehicleTypeCode)
         camIntervalMs = prefs.getInt(PREF_CAM_INTERVAL_MS, DEFAULT_CAM_INTERVAL_MS)
             .coerceIn(MIN_CAM_INTERVAL_MS, MAX_CAM_INTERVAL_MS)
         // Never resume RF transmission merely because the process was recreated.
@@ -1596,6 +1602,7 @@ class CitsBridgeService : Service() {
         const val PREF_CAM_STATION_ID = "cam_station_id"
         const val PREF_CAM_MAC = "cam_mac"
         const val PREF_SREM_PROFILE = "srem_profile"
+        const val PREF_VEHICLE_TYPE = "vehicle_type"
         const val PREF_TX_APPROVED = "tx_approved"
         const val DEFAULT_MQTT_URI = "mqtts://cits1.opentrafficmap.org"
         const val DEFAULT_MQTT_MAX_QUEUE_LENGTH = 100

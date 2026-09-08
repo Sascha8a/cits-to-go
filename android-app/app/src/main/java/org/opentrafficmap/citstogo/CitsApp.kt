@@ -116,8 +116,6 @@ fun CitsApp(
     onStopPcap: () -> Unit,
     onStartReplay: () -> Unit,
     onStopReplay: () -> Unit,
-    camStationType: org.opentrafficmap.citstogo.cam.StationType,
-    onCamStationTypeChange: (org.opentrafficmap.citstogo.cam.StationType) -> Unit,
     camIntervalMs: String,
     onCamIntervalChange: (String) -> Unit,
     onConfigureCam: (Boolean) -> Unit,
@@ -285,8 +283,6 @@ fun CitsApp(
                             AppPage.CamBroadcast -> CamBroadcastPage(
                                 status = status,
                                 logLine = logLine,
-                                stationType = camStationType,
-                                onStationTypeChange = onCamStationTypeChange,
                                 intervalMs = camIntervalMs,
                                 onIntervalChange = onCamIntervalChange,
                                 onConfigure = onConfigureCam,

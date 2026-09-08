@@ -94,7 +94,7 @@ fun SettingsPage(
             onMaxQueueAgeSecondsChange = { draftMaxQueueAgeSeconds = it },
         )
 
-        SremProfileCard(
+        VehicleTypeCard(
             sremProfile = draftSremProfile,
             onSremProfileChange = { draftSremProfile = it },
         )
@@ -285,7 +285,7 @@ private fun MqttCard(
 }
 
 @Composable
-private fun SremProfileCard(
+private fun VehicleTypeCard(
     sremProfile: SremProfile,
     onSremProfileChange: (SremProfile) -> Unit,
 ) {
@@ -328,13 +328,13 @@ private fun SremProfileCard(
                         .padding(start = 12.dp),
                 ) {
                     Text(
-                        "SREM vehicle profile",
+                        "Vehicle Type",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(ContextCompat.getColor(context, R.color.on_surface)),
                     )
                     Text(
-                        "Select the vehicle type for SRM messages",
+                        "Used for CAM broadcasts and SREM requests",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(ContextCompat.getColor(context, R.color.on_surface_variant)),
                     )

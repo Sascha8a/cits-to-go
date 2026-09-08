@@ -4,7 +4,6 @@ import org.opentrafficmap.citstogo.bridge.BridgeStatus
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -16,29 +15,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import org.opentrafficmap.citstogo.cam.StationType
 
 @Composable
 fun CamBroadcastPage(
     status: BridgeStatus,
     logLine: String,
-    stationType: StationType,
-    onStationTypeChange: (StationType) -> Unit,
     intervalMs: String,
     onIntervalChange: (String) -> Unit,
     onConfigure: (Boolean) -> Unit,
 ) {
     CamPanel(
         status = status,
-        stationType = stationType,
-        onStationTypeChange = onStationTypeChange,
         intervalMs = intervalMs,
         onIntervalChange = onIntervalChange,
         onConfigure = onConfigure,
@@ -51,8 +43,6 @@ fun CamBroadcastPage(
 @Composable
 private fun CamPanel(
     status: BridgeStatus,
-    stationType: StationType,
-    onStationTypeChange: (StationType) -> Unit,
     intervalMs: String,
     onIntervalChange: (String) -> Unit,
     onConfigure: (Boolean) -> Unit,
@@ -71,19 +61,6 @@ private fun CamPanel(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.secondary,
         )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Type", modifier = Modifier.weight(1f))
-            TextButton(onClick = {
-                val types = StationType.selectable
-                val index = (types.indexOf(stationType) - 1 + types.size) % types.size
-                onStationTypeChange(types[index])
-            }) { Text("‹") }
-            Text(stationType.displayName, modifier = Modifier.weight(2f))
-            TextButton(onClick = {
-                val types = StationType.selectable
-                onStationTypeChange(types[(types.indexOf(stationType) + 1) % types.size])
-            }) { Text("›") }
-        }
         OutlinedTextField(
             value = intervalMs,
             onValueChange = onIntervalChange,

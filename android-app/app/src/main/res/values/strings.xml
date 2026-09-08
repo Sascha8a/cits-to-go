@@ -1,5 +1,7 @@
 <resources>
     <string name="app_name">C-ITS to go</string>
+    <string name="author_name">Alexander Lampalzer</string>
+    <string name="author_email">sascha@localhost.systems</string>
 
     <!-- Settings Page -->
     <string name="settings_title">Settings</string>
@@ -17,9 +19,9 @@
     <string name="mqtt_queue_age_placeholder">0.2</string>
     <string name="mqtt_queue_age_suffix">s</string>
 
-    <!-- SREM Profile Section -->
-    <string name="srem_title">SREM vehicle profile</string>
-    <string name="srem_description">Select the vehicle type for SRM messages</string>
+    <!-- Vehicle Type Section -->
+    <string name="srem_title">Vehicle Type</string>
+    <string name="srem_description">Used for CAM broadcasts and SREM requests</string>
     <string name="srem_previous">Previous</string>
     <string name="srem_next">Next</string>
 

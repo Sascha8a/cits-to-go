@@ -15,7 +15,7 @@ enum class StationType(val code: Int, val displayName: String) {
     ROAD_SIDE_UNIT(15, "Road-side unit");
 
     companion object {
-        val selectable: List<StationType> = listOf(PEDESTRIAN, CYCLIST)
+        val selectable: List<StationType> = entries.filterNot { it == TRAILER || it == ROAD_SIDE_UNIT }
 
         fun fromCode(code: Int): StationType =
             entries.firstOrNull { it.code == code } ?: PEDESTRIAN
