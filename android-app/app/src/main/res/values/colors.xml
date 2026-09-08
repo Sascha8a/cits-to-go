@@ -18,6 +18,7 @@
 
     <!-- Tertiary Colors -->
     <color name="tertiary">#B45309</color>
+    <color name="tertiary_container">#FEE4D0</color>
     <color name="on_tertiary">#FFFFFF</color>
 
     <!-- Background & Surface -->
@@ -30,6 +31,7 @@
     <!-- Error Colors -->
     <color name="error">#B91C1C</color>
     <color name="error_container">#FDE8E8</color>
+    <color name="error_light">#FEE2E2</color>
     <color name="on_error">#FFFFFF</color>
     <color name="on_error_container">#B91C1C</color>
 

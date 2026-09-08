@@ -1,3 +1,52 @@
 <resources>
     <string name="app_name">C-ITS to go</string>
+
+    <!-- Settings Page -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_version_format">Version %s</string>
+
+    <!-- MQTT Section -->
+    <string name="mqtt_title">MQTT</string>
+    <string name="mqtt_description">Connect to the broker and identify this node</string>
+    <string name="mqtt_broker_label">Broker URL</string>
+    <string name="mqtt_broker_placeholder">mqtt://broker.example:1883</string>
+    <string name="mqtt_node_id_label">Node ID</string>
+    <string name="mqtt_queue_length_label">Max queue length</string>
+    <string name="mqtt_queue_length_placeholder">100</string>
+    <string name="mqtt_queue_age_label">Max queue age</string>
+    <string name="mqtt_queue_age_placeholder">0.2</string>
+    <string name="mqtt_queue_age_suffix">s</string>
+
+    <!-- SREM Profile Section -->
+    <string name="srem_title">SREM vehicle profile</string>
+    <string name="srem_description">Select the vehicle type for SRM messages</string>
+    <string name="srem_previous">Previous</string>
+    <string name="srem_next">Next</string>
+
+    <!-- Bluetooth Section -->
+    <string name="bluetooth_title">Bluetooth</string>
+    <string name="bluetooth_description">Enrollment uses USB once. Afterwards the Bluetooth bond secures normal connections.</string>
+    <string name="bluetooth_enroll_button">Enroll this phone for Bluetooth</string>
+    <string name="bluetooth_enrolling">Enrolling…</string>
+    <string name="bluetooth_stop_first">Stop the active connection before enrollment.</string>
+
+    <!-- Debug Section -->
+    <string name="debug_title">Debug menu</string>
+    <string name="debug_description">Show firmware and transport diagnostics in the navigation drawer.</string>
+    <string name="debug_revoke_tx_approval">Revoke TX Approval</string>
+    <string name="debug_tx_approval_not_active">TX Approval not active</string>
+
+    <!-- Save -->
+    <string name="save">Save</string>
+
+    <!-- Content Descriptions -->
+    <string name="cd_open_menu">Open navigation menu</string>
+    <string name="cd_mqtt_broker_link">Broker link</string>
+    <string name="cd_node_id_computer">Node ID computer</string>
+    <string name="cd_queue_length_storage">Queue length storage</string>
+    <string name="cd_queue_age_schedule">Queue age schedule</string>
+    <string name="cd_vehicle_profile">Vehicle profile</string>
+    <string name="cd_bluetooth_qr">Bluetooth QR code</string>
+    <string name="cd_debug_info">Debug information</string>
+    <string name="cd_revoke_approval">Revoke approval</string>
 </resources>

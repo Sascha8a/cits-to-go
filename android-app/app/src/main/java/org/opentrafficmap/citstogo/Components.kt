@@ -107,27 +107,40 @@ private fun confettiColors(context: android.content.Context): List<Color> = list
 )
 
 @Composable
-fun AppHeader(title: String, onOpenMenu: () -> Unit) {
+fun AppHeader(title: String, onOpenMenu: () -> Unit, subtitle: String? = null) {
     val context = LocalContext.current
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onOpenMenu) {
-            Icon(
-                imageVector = Icons.Rounded.Menu,
-                contentDescription = "Open navigation menu",
-                tint = Color(ContextCompat.getColor(context, R.color.on_surface)),
-                modifier = Modifier.size(28.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onOpenMenu) {
+                Icon(
+                    imageVector = Icons.Rounded.Menu,
+                    contentDescription = "Open navigation menu",
+                    tint = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+            Text(
+                title,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(ContextCompat.getColor(context, R.color.on_surface)),
+                modifier = Modifier.weight(1f),
             )
         }
-        Text(
-            title,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = Color(ContextCompat.getColor(context, R.color.on_surface)),
-            modifier = Modifier.weight(1f),
-        )
+        if (subtitle != null) {
+            Text(
+                subtitle,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal,
+                color = Color(ContextCompat.getColor(context, R.color.on_surface_variant)),
+                modifier = Modifier.padding(start = 44.dp, top = 4.dp, bottom = 8.dp),
+            )
+        }
     }
 }
 

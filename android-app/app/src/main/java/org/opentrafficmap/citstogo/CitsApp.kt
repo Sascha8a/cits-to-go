@@ -9,6 +9,7 @@ import org.opentrafficmap.citstogo.FlashingPage
 import org.opentrafficmap.citstogo.intersection.IntersectionSnapshot
 import org.opentrafficmap.citstogo.IntersectionSortMode
 import org.opentrafficmap.citstogo.TxApprovalPromptState
+import org.opentrafficmap.citstogo.BuildConfig
 
 import org.opentrafficmap.citstogo.bridge.BridgeStatus
 import org.opentrafficmap.citstogo.bridge.ConnectionMode
@@ -254,9 +255,15 @@ fun CitsApp(
                         modifier = contentModifier,
                         verticalArrangement = Arrangement.spacedBy(if (selectedPage == AppPage.Home) 10.dp else 14.dp),
                     ) {
+                        val headerSubtitle = if (selectedPage == AppPage.Settings) {
+                            "Version ${BuildConfig.VERSION_NAME}"
+                        } else {
+                            null
+                        }
                         AppHeader(
                             title = selectedPage.title,
                             onOpenMenu = { scope.launch { drawerState.open() } },
+                            subtitle = headerSubtitle,
                         )
                         when (selectedPage) {
                             AppPage.Home -> HomePage(
